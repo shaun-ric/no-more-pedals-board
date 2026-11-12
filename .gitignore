@@ -3,3 +3,25 @@
 ################################################################################
 
 /.vs
+
+# Build output (CMake, Visual Studio)
+/build/
+/out/
+/cmake-build-*/
+CMakeUserPresets.json
+*.user
+
+# Steinberg ASIO SDK: its licence does not allow redistribution, so it stays local
+asiosdk*/
+/sdk/
+
+# Generated library output and downloads
+/tmp/
+*.zip
+
+# Editor and OS clutter
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+__pycache__/
