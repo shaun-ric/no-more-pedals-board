@@ -39,4 +39,4 @@ Scripts live under `tools/` (see `tools/README.md`): `gen_poppunk_library.py` ge
 - The owner wants an agentic workflow from here on: take a request, do the work, verify what can be verified, deliver files, and report concisely.
 
 ## Definition of done for a change
-Code compiles in a syntax check; README section added; pull request opened against `main`; any library JSON validated by script (all node ids, edge ids and file references resolve); the pull request states test steps and known risks.
+`tools/ci_check.sh` passes (the pull request's Validate check is green); README section added; pull request opened against `main`; any library JSON validated by script (all node ids, edge ids and file references resolve); the pull request states test steps and known risks.
