@@ -376,3 +376,16 @@ Setlist files gain a `slots` list per entry; older setlists load with no assignm
 - **Send now** sends the list straight away (even with the node off), and shows what went wrong if the port is missing. Use it to check your device answers.
 - **Nothing is sent** at startup or when a scene is merely loaded without a preset being applied, and messages never go through the audio path, so they cannot click.
 - It can be on the Play tab like any node, and has no MIDI-learn addresses of its own.
+
+## 31. Automatic checks and the Windows build (GitHub Actions)
+
+Every pull request to `main`, every push to `main`, and a manual run (Actions tab > **Check and build** > **Run workflow**) start two stages:
+
+1. **Validate (Linux)** runs by itself, in a few minutes. It syntax-checks every source file against JUCE 8.0.6 and NAM core, builds and runs the graph harnesses and compares their output with the known-good results (delay compensation, the note path), and generates and validates the Pop-Punk library. The same checks run locally with `tools/ci_check.sh <JUCE modules folder>`.
+2. **Build RigBench.exe (Windows)** starts only if validation passed, and **waits for your approval**. GitHub shows "Review deployments" on the run (and emails you); approve it and the build runs, taking roughly 15 to 30 minutes. The ASIO SDK is downloaded from Steinberg during the build and never stored in the repository.
+
+**Getting the exe.** Open the finished run on the Actions tab; `RigBench-exe-<run number>` is under **Artifacts** at the bottom. It downloads as a zip containing `RigBench.exe`, and is kept for 30 days. Because the repository is public, anyone signed in to GitHub can download these builds.
+
+**One-time setup (before the first run):** Settings > Environments > **New environment**, name it exactly `windows-build`, tick **Required reviewers**, add yourself, and **Save protection rules**. Without that, GitHub creates the environment by itself with no approval step and the build runs straight away.
+
+What it does not do: it does not run the app, play audio, or test on the rig. A green build means the code compiles with Visual Studio, nothing more.

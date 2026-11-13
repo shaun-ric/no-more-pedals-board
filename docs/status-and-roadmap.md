@@ -21,7 +21,8 @@ VSTi nodes with note path; delete node preset / scene preset / scene; setlist en
 4. Audition the library and tune captures (the owner picks; agents cannot hear). 96 AC30 and 6 Twin captures were added but only one bright and one noon AC30 and one Twin are used.
 5. Stage hardening: boot straight into the app, Windows lockdown, audio device reconnection, watchdog, logging, 60-minute soak test, engine/GUI process split.
 6. Smaller features: clear a single slot binding, scene-level slot defaults UI, stereo edges.
-7. v2 ideas: Linux port, single enclosure, ARM benchmark.
+7. CI: GitHub Actions validates every pull request and builds the Windows exe after the owner approves (README section 31). The build job has not run yet; the first run confirms the ASIO SDK download and the MSVC build.
+8. v2 ideas: Linux port, single enclosure, ARM benchmark.
 
 ## Per-round checklist
 Reproduce or locate the cause; make the change on a branch; syntax-check; update README section; regenerate and validate library files if presets are affected; open a pull request with changes, tests and risks; update this file.
