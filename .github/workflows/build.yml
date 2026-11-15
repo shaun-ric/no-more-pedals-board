@@ -1,0 +1,78 @@
+# Two stages:
+#   1. validate: runs by itself on every pull request to main, every push to main, and on demand.
+#      Syntax-checks all sources against JUCE, runs the graph harnesses, and checks the song library.
+#   2. build: Windows build of RigBench.exe. It uses the "windows-build" environment, which requires
+#      approval from the repository owner (Settings > Environments > windows-build > Required reviewers),
+#      so it waits until approved and only runs if validation passed.
+name: Check and build
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer run for the same branch or pull request replaces one that is still waiting or running.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Get JUCE 8.0.6 (headers for the syntax check)
+        run: git clone --quiet --depth 1 --branch 8.0.6 https://github.com/juce-framework/JUCE.git "$RUNNER_TEMP/juce"
+
+      - name: Syntax check, graph harnesses, library validator
+        run: bash tools/ci_check.sh "$RUNNER_TEMP/juce/modules"
+
+  build:
+    name: Build RigBench.exe (Windows, needs approval)
+    needs: validate
+    runs-on: windows-latest
+    environment: windows-build
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      # Downloaded from Steinberg at build time (never stored in the repository). Steinberg offers the
+      # ASIO SDK under GPLv3 as well as its proprietary licence since October 2025.
+      - name: Download the ASIO SDK from Steinberg
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP "asiosdk.zip"
+          $dir = Join-Path $env:RUNNER_TEMP "asiosdk"
+          Invoke-WebRequest -Uri "https://www.steinberg.net/asiosdk" -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $dir
+          $header = Get-ChildItem $dir -Recurse -Filter asio.h | Where-Object { $_.Directory.Name -eq "common" } | Select-Object -First 1
+          if (-not $header) { throw "The download did not contain common/asio.h. Steinberg may have moved the SDK." }
+          $root = $header.Directory.Parent.FullName -replace '\\', '/'
+          Write-Host "ASIO SDK found at $root"
+          "ASIO_SDK_DIR=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Configure (CMake downloads JUCE 8.0.6)
+        run: cmake -S . -B build -A x64 -DASIO_SDK_DIR="${{ env.ASIO_SDK_DIR }}"
+
+      - name: Build (Release)
+        run: cmake --build build --config Release --parallel
+
+      - name: Upload RigBench.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: RigBench-exe-${{ github.run_number }}
+          path: build/RigBench_artefacts/Release/RigBench.exe
+          if-no-files-found: error
+          retention-days: 30
