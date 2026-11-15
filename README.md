@@ -389,3 +389,18 @@ Every pull request to `main`, every push to `main`, and a manual run (Actions ta
 **One-time setup (before the first run):** Settings > Environments > **New environment**, name it exactly `windows-build`, tick **Required reviewers**, add yourself, and **Save protection rules**. Without that, GitHub creates the environment by itself with no approval step and the build runs straight away.
 
 What it does not do: it does not run the app, play audio, or test on the rig. A green build means the code compiles with Visual Studio, nothing more.
+
+## 32. Fixes: presets keep their files, broken scene files are left alone, SY-200 input in the song library
+
+**Presets keep their capture, IR or plugin (as section 28 describes).** Saving a node preset now records the file the node has loaded, and so does every node preset a **Save preset...** creates. When a scene preset is saved, an existing node preset is only reused if its settings *and* its file both match. Before, an amp saved at default settings could be linked to a library preset for a different capture (all generated amp presets share the same settings), and recalling the scene preset then loaded that other capture.
+- Scene presets you saved from the app before this fix may still point at the wrong amp preset. If a part loads the wrong capture, load the right one and save the scene preset again.
+
+**A scene file with a typo is never overwritten.** If a scene file is not valid JSON (a missing comma after editing it by hand, say), RigBench no longer replaces it with the starting rig, so its name, program number, MIDI bindings and graph are kept for you to fix. Instead:
+- at startup, the scene is left out of the scene list and the status strip says which file is broken;
+- selecting it from a setlist or a Program Change does nothing (the current scene keeps playing) and the status strip says why;
+- if the file breaks while RigBench is running, newly learned MIDI bindings and graph edits are not saved until it is fixed, and the status strip and MIDI monitor say so.
+
+These messages stay on the status strip until RigBench is restarted, so fix the file and restart.
+
+**SY-200 input in the Pop-Punk library.** The generated scene presets for the five SY-200 parts (Sk8er Boi "Guitar + SY" and "Lead boost", Still into You "Pre-chorus + chorus + SY", I Don't Care "Solo + SY", Just a Girl "Verse + SY") now switch the SY-200 input node on. Before, the input stayed off, and an input that is off is silent, so the SY-200 was never heard. `tools/validate_library.py` now fails on any preset that enables a connection from an input it leaves off.
+- To get the fix, regenerate and install the library (this **overwrites** presets and setlist names you edited in the app), or edit those five scene presets by hand: select the SY-200 in node, switch it on, and save the scene preset.

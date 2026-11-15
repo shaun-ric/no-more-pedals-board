@@ -184,7 +184,33 @@ void Rig::setStatus (const juce::String& text)
 juce::String Rig::getStatusMessage() const
 {
     const juce::ScopedLock sl (statusLock);
+    juce::String text = status;
+
+    for (const auto& n : notices)
+        text << (text.isEmpty() ? "" : "  ") << n;
+
+    return text;
+}
+
+juce::String Rig::latestProblem() const
+{
+    const juce::ScopedLock sl (statusLock);
     return status;
+}
+
+void Rig::addNotice (const juce::String& text)
+{
+    const juce::ScopedLock sl (statusLock);
+    notices.addIfNotAlreadyThere (text);
+}
+
+juce::String Rig::currentFileRef (const Node& node) const
+{
+    if (library == nullptr || ! node.hasFile())
+        return {};
+
+    const juce::String path = node.filePath();
+    return path.isEmpty() ? juce::String() : library->storedPathFor (juce::File (path));
 }
 
 // ===== The graph ======================================================================================
@@ -519,7 +545,7 @@ void Rig::applyScenePreset (const ScenePreset& preset)
                     if (np.file.isNotEmpty())   // the model or IR first (nothing happens if it is already loaded)
                     {
                         loadPresetFile (node->id(), np);
-                        const juce::String fileProblem = getStatusMessage();
+                        const juce::String fileProblem = latestProblem();
                         if (fileProblem.isNotEmpty())
                             problems << fileProblem << "  ";
                     }
@@ -597,6 +623,7 @@ bool Rig::saveNodePreset (const std::string& nodeId, const juce::String& name, j
     preset.name = name;
     preset.id = Library::slug (name);
     preset.values = captureValues (*node);
+    preset.file = currentFileRef (*node);   // the capture, IR or plugin, so recalling the preset loads it
 
     if (preset.values.empty())
     {
@@ -656,10 +683,13 @@ bool Rig::saveScenePreset (const juce::String& name, juce::String& error)
         const auto values = captureValues (*node);
         if (! values.empty())
         {
-            // Reuse a saved node preset with identical settings, or save these as a new one.
+            // Reuse a saved node preset with identical settings and the same file, or save these as a new
+            // one. The file must match too: two amp presets with the same settings but different captures
+            // are different sounds, and recalling the wrong one would load the wrong capture.
+            const juce::String fileRef = currentFileRef (*node);
             bool matched = false;
             for (const auto& np : library->listNodePresets (node->type()))
-                if (sameValues (values, np.values))
+                if (sameValues (values, np.values) && Library::sameFileRef (np.file, fileRef))
                 {
                     entry.presetId = np.id;
                     matched = true;
@@ -673,6 +703,7 @@ bool Rig::saveScenePreset (const juce::String& name, juce::String& error)
                 np.name = name + " - " + node->displayName();
                 np.id = Library::slug (np.name);
                 np.values = values;
+                np.file = fileRef;
 
                 NodePreset old;
                 np.slot = library->readNodePreset (np.nodeType, np.id, old) ? old.slot : library->nextFreeNodeSlot (np.nodeType);

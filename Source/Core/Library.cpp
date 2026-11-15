@@ -98,15 +98,36 @@ juce::String Library::slug (const juce::String& name)
 
 bool Library::updateJsonFile (const juce::File& file, const std::function<void (juce::DynamicObject&)>& edit)
 {
-    juce::var root = file.existsAsFile() ? juce::JSON::parse (file) : juce::var();
+    juce::var root;
 
-    if (root.getDynamicObject() == nullptr)
+    if (file.existsAsFile())
+    {
+        root = juce::JSON::parse (file);
+
+        // Starting from an empty object here would throw away everything else in the file (a scene's
+        // name, program number, MIDI bindings and graph). Leave the file alone so it can be fixed.
+        if (root.getDynamicObject() == nullptr)
+            return false;
+    }
+    else
+    {
         root = juce::var (new juce::DynamicObject());
+    }
 
     edit (*root.getDynamicObject());
 
     file.getParentDirectory().createDirectory();
     return file.replaceWithText (juce::JSON::toString (root));
+}
+
+bool Library::isJsonObjectFile (const juce::File& file)
+{
+    return file.existsAsFile() && juce::JSON::parse (file).getDynamicObject() != nullptr;
+}
+
+bool Library::sameFileRef (const juce::String& a, const juce::String& b)
+{
+    return a.replaceCharacter ('\\', '/').equalsIgnoreCase (b.replaceCharacter ('\\', '/'));
 }
 
 juce::File Library::nodePresetFolder (const std::string& nodeType) const

@@ -59,21 +59,41 @@ namespace
     }
 
     std::string shortName (const Param& p) { return p.id.substr (p.nodeId.size() + 1); }
+
+    juce::String unreadableSceneNotice (const juce::File& file)
+    {
+        return "Scene file " + file.getFileName() + " is not valid JSON, so it is not loaded or saved. "
+               "Fix the typo (or delete the file) and restart RigBench.";
+    }
 }
 
 void SceneManager::start()
 {
     router.onSelectScene = [this] (const juce::String& id) { selectScene (id); };
 
+    // Scene files that cannot be read are left out of the scene list (and never written to). Say so, or
+    // a scene would just seem to have disappeared.
+    for (const auto& f : library.rootFolder().getChildFile ("scenes").findChildFiles (juce::File::findFiles, false, "*.scene.json"))
+        if (! Library::isJsonObjectFile (f))
+            rig.addNotice (unreadableSceneNotice (f));
+
     auto scenes = library.listScenes();
 
     if (scenes.empty())
     {
-        // First run: write a default scene (loading a missing file creates it).
-        router.loadScene (library.sceneFile ("default"));
+        // First run: write a default scene (loading a missing file creates it). If a "default" scene file
+        // exists but cannot be read, it is left alone and the new scene gets another name.
+        juce::String id = "default";
+        for (int n = 2; library.sceneFile (id).existsAsFile(); ++n)
+            id = "default-" + juce::String (n);
+
+        router.loadScene (library.sceneFile (id));
         router.setScenePc (0);
         ++library.revision;
         scenes = library.listScenes();
+
+        if (scenes.empty())
+            return;   // the library folder cannot be written; the status strip shows why
     }
 
     juce::String first = scenes.front().id;
@@ -90,6 +110,14 @@ void SceneManager::selectScene (const juce::String& sceneId, bool atStartup, con
     const juce::File file = library.sceneFile (sceneId);
     if (! file.existsAsFile())
         return;
+
+    // A scene file that is not valid JSON is not selected at all: loading it would show the starting rig
+    // in its place, and saving would then replace the file. The rig stays on the scene it is playing.
+    if (! Library::isJsonObjectFile (file))
+    {
+        rig.addNotice (unreadableSceneNotice (file));
+        return;
+    }
 
     router.loadScene (file);        // its MIDI bindings
     rig.setCurrentScene (sceneId);
@@ -281,7 +309,11 @@ void SceneManager::saveGraph()
                     nd.props.emplace_back (name, p->get());
             }
 
-    library.writeGraphDef (library.sceneFile (currentId), currentDef);
+    const juce::File file = library.sceneFile (currentId);
+    if (! library.writeGraphDef (file, currentDef))
+        rig.addNotice (file.existsAsFile() && ! Library::isJsonObjectFile (file)
+                           ? unreadableSceneNotice (file)
+                           : "Scene file " + file.getFileName() + " could not be saved. Check the RigBench folder is not read-only.");
 }
 
 bool SceneManager::addNode (const std::string& type, const juce::String& name, juce::String& error)

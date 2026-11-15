@@ -3,8 +3,9 @@
 Usage: python3 validate_library.py <library root> <asset root> [<asset root> ...]
 Checks that every scene preset only uses nodes and edges that exist in its scene, that every
 model/IR a node preset names is the file its scene node loads (no swaps inside a song), that
-every referenced NAM/IR file exists under one of the asset roots, and that scene preset slots
-are unique per scene.
+every referenced NAM/IR file exists under one of the asset roots, that scene preset slots
+are unique per scene, and that no scene preset switches on a connection from an input node it
+leaves switched off (an input that is off is silent, so that connection would carry nothing).
 """
 import glob, json, os, sys
 
@@ -30,8 +31,12 @@ for sc in glob.glob(f'{root}/scenes/*.scene.json'):
                 nf = json.load(open(hits[0])).get('file')
                 if nf:
                     assert nf == nodes[n['node']].get('file'), ('file differs from scene node', sid, n, nf)
+        active = {n['node'] for n in p['nodes'] if n.get('active')}
         for e in p['edges']:
             assert e['edge'] in edges, (sid, e)
+            src = e['edge'].split('>')[0]
+            if e.get('enabled') and nodes[src]['type'] == 'input':
+                assert src in active, ('input is off but its connection is on, so it is silent', sid, p['id'], e['edge'])
     assert len(set(slots)) == len(slots), ('duplicate slot', sid)
 print('missing files:', sorted(missing) or 'none')
 print('ok')

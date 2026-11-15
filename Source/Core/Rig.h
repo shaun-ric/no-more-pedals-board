@@ -47,7 +47,12 @@ public:
     ParamRegistry& params() noexcept { return registry; }
     Graph& graph() noexcept { return graphObj; }
     NoteBus& notes() noexcept { return noteBus; }   // notes for the VST3 instruments
-    juce::String getStatusMessage() const;
+    juce::String getStatusMessage() const;   // the latest problem, followed by any lasting notices
+
+    // A lasting notice (any thread): stays on the status strip until the app restarts, unlike the status
+    // message, which the next successful load clears. For problems that need fixing by hand, such as a
+    // scene file that is not valid JSON. The same text is only added once.
+    void addNotice (const juce::String& text);
 
     // ---- Scenes and presets -------------------------------------------------------------------
     void setLibrary (Library* lib) noexcept { library = lib; }
@@ -74,7 +79,8 @@ private:
     void fade (bool down);          // calls nest: the outputs come back when the outermost one ends
     void loadPresetFile (const std::string& nodeId, const NodePreset& preset);   // loads a preset's file unless it is already loaded
     int fadeDepth = 0;
-    juce::String currentFileRef (const Node& node) const;
+    juce::String currentFileRef (const Node& node) const;   // the node's loaded file, as a preset stores it ("lib:..." or a path), or empty
+    juce::String latestProblem() const;                     // the status message without the notices
     std::string nodeTypeOf (const std::string& nodeId) const;
     void setStatus (const juce::String& text);
 
@@ -93,6 +99,7 @@ private:
 
     mutable juce::CriticalSection statusLock;
     juce::String status;
+    juce::StringArray notices;
 
     Library* library = nullptr;
     mutable juce::CriticalSection sceneLock;
