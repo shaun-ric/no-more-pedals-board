@@ -5,11 +5,11 @@ Scope: `source/Source` (Core, Nodes, AudioEngine, NamProcessor, MidiRouter, Scen
 ## A. Defects (fix first)
 
 1. **Saving a scene preset can swap an amp's model.** `Rig::saveScenePreset` reuses any library node preset whose values match (`sameValues`) and ignores the preset's `file`. All generated amp presets at target -18 / input 0 share the same values, so an amp saved from the app links to the lowest-slot one (a Rectifier capture). On recall, `loadPresetFile` loads that capture into the node. Related: `saveNodePreset` and the new-preset branch never store `file` (`currentFileRef` is declared in `Rig.h` but not defined or used), so presets saved in the app never carry their model/IR.
-   Fix: store the node's current file in saved presets, and include it in the match.
+   Fix: store the node's current file in saved presets, and include it in the match. *(Fixed 2026-11-15, README section 32.)*
 2. **A scene file that fails to parse is overwritten.** `Library::readGraphDef` returns false both for "no graph key" and for invalid JSON. `SceneManager::selectScene` then writes the default graph, and `updateJsonFile` starts from an empty object, so name, pc, MIDI bindings and graph are lost. `MidiRouter::loadScene` + `ensureDefaults` + `saveScene` does the same. The generated MIDI map text invites hand edits of these files.
-   Fix: distinguish parse failure from a missing key, never write after a parse failure, report it, keep a `.bak`.
+   Fix: distinguish parse failure from a missing key, never write after a parse failure, report it, keep a `.bak`. *(Fixed 2026-11-15: `updateJsonFile` refuses to write over an unreadable file, so no `.bak` is needed; README section 32.)*
 3. **SY-200 return is silent in the generated library.** `InputNode::processInactive` clears the buffer, `applyScenePreset` switches off every node a preset does not list, and `gen_poppunk_library.py` never lists `in2`.
-   Fix: `on('in2')` for parts with `sy`.
+   Fix: `on('in2')` for parts with `sy`. *(Fixed 2026-11-15, with a validator check; README section 32.)*
 4. **Dry guitar can leak after adding an amp to an existing scene.** Older presets do not list the new node or its edges. The node goes inactive with `passthrough` reset to its default (true), and unlisted edges reset to their default (enabled), so raw DI is summed into the chain. The comment in `AmpNodes.h` still says a switched-off capture is silent by default.
    Fix options: unlisted edges default to off when either end is unlisted; or passthrough defaults true only for pedal captures (gear type from NAM metadata, or a separate node type).
 5. **Missing-file warnings can vanish.** In `Rig::applyGraph`, each successful `loadNodeFile` calls `setStatus({})`, wiping a "file not found" from an earlier node. `MidiOutNode::presetApplied` discards its problem string, so a failed SY-200 patch change is invisible.

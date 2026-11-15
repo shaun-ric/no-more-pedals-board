@@ -710,13 +710,23 @@ void MidiRouter::saveScene()
 
     // Only the fields this class owns are written, so the scene's other fields (such as the model
     // and IR it uses) are kept.
-    Library::updateJsonFile (sceneFile, [this, &midiVar] (juce::DynamicObject& root)
+    const bool saved = Library::updateJsonFile (sceneFile, [this, &midiVar] (juce::DynamicObject& root)
     {
         root.setProperty ("version", 1);
         root.setProperty ("name", sceneName);
         root.setProperty ("pc", scenePcValue);
         root.setProperty ("midi", midiVar);
     });
+
+    // Usually the file was broken by hand while RigBench was running. It is left as it is (nothing in it
+    // is lost), and the bindings learned since then are not saved until it is fixed.
+    if (! saved)
+    {
+        const juce::String text = "MIDI bindings not saved: scene file " + sceneFile.getFileName()
+                                  + " is not valid JSON (or cannot be written). Fix it and learn the binding again.";
+        addLog (text);
+        rig.addNotice (text);
+    }
 }
 
 void MidiRouter::setScenePc (int pc)

@@ -116,8 +116,16 @@ public:
 
     // Reads a JSON file (or starts an empty object), lets `edit` change it, and writes it back. Anything
     // `edit` does not touch is kept, so different parts of the app can each save their own fields in a
-    // shared file, such as a scene.
+    // shared file, such as a scene. A file that exists but is not a valid JSON object (a typo made while
+    // editing it by hand, say) is never written over: the call returns false and leaves it as it is.
     static bool updateJsonFile (const juce::File& file, const std::function<void (juce::DynamicObject&)>& edit);
+
+    // True if the file exists and holds a JSON object.
+    static bool isJsonObjectFile (const juce::File& file);
+
+    // True if two stored file references ("lib:NAM/amp.nam" or a full path) name the same file. Case and
+    // the direction of the slashes are ignored, as Windows ignores them.
+    static bool sameFileRef (const juce::String& a, const juce::String& b);
 
     // Node presets
     std::vector<NodePreset> listNodePresets (const std::string& nodeType) const;   // sorted by slot

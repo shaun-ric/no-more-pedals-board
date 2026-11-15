@@ -301,7 +301,9 @@ for gname,gsongs in GROUPS.items():
         pname=f"{song['title']} - {p['name']}"; pid=slug(pname)
         L=[]
         def on(n,pre_=None): L.append({'node':n,'preset':pre_ or '','active':True})
-        on('in1'); on('out1',node_preset('output','Output -10.5 dB',{'level':-10.5})); on('out2',node_preset('output','Output -10.5 dB',{'level':-10.5}))
+        on('in1')
+        if p['sy'] is not None: on('in2')   # the SY-200 return: an input left off is silent
+        on('out1',node_preset('output','Output -10.5 dB',{'level':-10.5})); on('out2',node_preset('output','Output -10.5 dB',{'level':-10.5}))
         on('gate',node_preset('gate',f"Gate {p['gate']} dB",{'threshold':p['gate']}))
         if p['comp']: on('comp',node_preset('compressor',p['comp'],dict(zip(['threshold','ratio','attack','release','makeup'],COMP[p['comp']]))))
         if p['boost']: on('boost',pedal_preset(p['boost']))

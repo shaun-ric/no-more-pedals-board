@@ -37,10 +37,11 @@ HFLAGS=("${COMMON[@]}" -O1 -DJUCE_STANDALONE_APPLICATION=0)
 g++ "${HFLAGS[@]}" -c tools/juce_unity.cpp -o "$work/juce.o"
 g++ "${HFLAGS[@]}" -c Source/Core/Graph.cpp -o "$work/graph.o"
 g++ "${HFLAGS[@]}" -c tools/stub.cpp -o "$work/stub.o"
+g++ "${HFLAGS[@]}" -c Source/Core/Library.cpp -o "$work/library.o"
 
 expect() {   # expect <harness> <text that must appear in its output>...
     local name="$1"; shift
-    g++ "${HFLAGS[@]}" "tools/$name.cpp" "$work/graph.o" "$work/juce.o" "$work/stub.o" -o "$work/$name" -lpthread -ldl
+    g++ "${HFLAGS[@]}" "tools/$name.cpp" "$work/graph.o" "$work/library.o" "$work/juce.o" "$work/stub.o" -o "$work/$name" -lpthread -ldl
     local out; out="$("$work/$name")"
     for want in "$@"; do
         if ! grep -qF -- "$want" <<< "$out"; then
@@ -56,6 +57,8 @@ expect test "compensated latency 100" "out  nonzero at 100 = 2.000000" "out2 non
 expect t2 "pushed on=1 cc7=0 pb=1" "events 3 offs 1" "events after 2nd block 3"
 # A node with no connections does not stop the graph from committing or running.
 expect t3 "commit 1 ''" "ok"
+# Scene files: a broken file is never written over; a valid one keeps its other fields; file references match as on Windows.
+expect t4 "broken: written 0 unchanged 1 readable 0" "good: written 1 kept 1 added 1" "new: written 1 readable 1" "same: 1 0 1 0"
 
 # ---- 3. The generated song library is consistent ------------------------------------------------------
 echo "== 3. Library generator and validator"
