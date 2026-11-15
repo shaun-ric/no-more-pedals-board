@@ -67,7 +67,7 @@ namespace
     }
 }
 
-void SceneManager::start()
+void SceneManager::start (const juce::String& preferredScene, const juce::String& preferredPreset)
 {
     router.onSelectScene = [this] (const juce::String& id) { selectScene (id); };
 
@@ -96,12 +96,22 @@ void SceneManager::start()
             return;   // the library folder cannot be written; the status strip shows why
     }
 
+    publishPrograms();
+
+    // The scene the app should come back to (only scenes that can be read are in the list).
+    if (preferredScene.isNotEmpty())
+        for (const auto& s : scenes)
+            if (s.id == preferredScene)
+            {
+                selectScene (preferredScene, true, preferredPreset);
+                return;
+            }
+
     juce::String first = scenes.front().id;
     for (const auto& s : scenes)
         if (s.id == "default")
             first = s.id;
 
-    publishPrograms();
     selectScene (first, true);
 }
 

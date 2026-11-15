@@ -18,8 +18,10 @@ public:
     SceneManager (Library& lib, Rig& rigToControl, MidiRouter& routerToUse)
         : library (lib), rig (rigToControl), router (routerToUse) {}
 
-    // Makes sure there is a scene, selects one, and starts listening for Program Changes.
-    void start();
+    // Makes sure there is a scene, selects one, and starts listening for Program Changes. `preferredScene`
+    // (and its `preferredPreset`) is selected if it exists and can be read, such as the setlist entry that was
+    // playing when the app last closed; otherwise the "default" scene, or the first one.
+    void start (const juce::String& preferredScene = {}, const juce::String& preferredPreset = {});
 
     // `presetId` picks which scene preset to start in (empty = the scene's first one).
     void selectScene (const juce::String& sceneId, bool atStartup = false, const juce::String& presetId = {});

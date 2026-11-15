@@ -54,6 +54,14 @@ public:
         return -1;
     }
 
+    // Marks an entry as the one playing without selecting it again (at startup, when its scene was already
+    // selected directly).
+    void markPlaying (int index)
+    {
+        if (index >= 0 && index < (int) current.entries.size())
+            lastIndex = index;
+    }
+
     void go (int index)
     {
         if (index < 0 || index >= (int) current.entries.size())

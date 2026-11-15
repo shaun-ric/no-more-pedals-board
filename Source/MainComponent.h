@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "AudioEngine.h"
+#include "Core/EventLog.h"
 #include "Core/Rig.h"
 #include "LevelMeter.h"
 #include "MidiRouter.h"
@@ -50,7 +51,37 @@ private:
     void updateTabVisibility();
     int currentTab() const { return tabs.getCurrentTabIndex(); }
 
+    // ---- Audio device recovery (README section 33) ------------------------------------------------------
+    // The "intended" device is the one chosen on the Setup tab (or saved in device.xml). If it closes, stops
+    // delivering audio, or is replaced by another device, the app reconnects to it every 2 seconds.
+    void captureIntendedDevice();
+    void readIntendedDevice (const juce::XmlElement& saved);
+    void saveDeviceState();
+    void checkAudioDevice();
+    juce::String intendedDeviceName() const;
+    juce::String describeDevice() const;
+    juce::String intendedType;
+    juce::AudioDeviceManager::AudioDeviceSetup intendedSetup;
+    bool haveIntendedDevice = false;
+    bool deviceLost = false;
+    juce::uint32 lastRetryMs = 0, blocksStillSinceMs = 0;
+    uint64_t lastBlockCount = 0;
+    juce::String lastRetryError;
+
+    // ---- Event log: only changes are written (README section 33) ---------------------------------------
+    void logChanges();
+    juce::String loggedScene, loggedPreset, loggedStatus, loggedDevice;
+    int loggedEntry = -2, loggedXruns = 0;
+    uint64_t loggedOverruns = 0;
+
+    // ---- Startup on the last setlist entry --------------------------------------------------------------
+    struct StartupEntry { juce::String scene, preset; int index = -1; };
+    StartupEntry readStartupEntry() const;
+    int savedEntry = -1;              // the setlist entry last playing, remembered in settings.json
+    juce::String savedEntrySetlist;   // which setlist that entry belongs to
+
     Library library { juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("RigBench") };
+    EventLog events { library.rootFolder().getChildFile ("logs") };
     Rig rig;
     AudioEngine engine { rig };
     MidiRouter midiRouter { rig };

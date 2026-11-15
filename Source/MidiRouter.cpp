@@ -523,6 +523,9 @@ void MidiRouter::dispatch (bool isNote, int channel, int number, int value, cons
             if (value <= 0)
                 continue;
 
+            if (isRepeatPress (b, monitorText)) { acted = true; continue; }
+            logEvent ("Footswitch: " + b.text);
+
             const int delta = b.param == "setlist:next" ? 1 : -1;
             juce::WeakReference<MidiRouter> self (this);
             juce::MessageManager::callAsync ([self, delta]
@@ -541,6 +544,9 @@ void MidiRouter::dispatch (bool isNote, int channel, int number, int value, cons
         {
             if (value <= 0)
                 continue;
+
+            if (isRepeatPress (b, monitorText)) { acted = true; continue; }
+            logEvent ("Footswitch: " + b.text);
 
             const int slot = juce::String (b.param.substr (5)).getIntValue();
             juce::WeakReference<MidiRouter> self (this);
@@ -561,6 +567,9 @@ void MidiRouter::dispatch (bool isNote, int channel, int number, int value, cons
         {
             if (value <= 0)
                 continue;
+
+            if (isRepeatPress (b, monitorText)) { acted = true; continue; }
+            logEvent ("Footswitch: " + b.text);
 
             Command pc;
             pc.type = Command::Type::LoadScenePreset;
@@ -606,6 +615,8 @@ void MidiRouter::dispatch (bool isNote, int channel, int number, int value, cons
         {
             if (value < 64)
                 continue;   // the release of a press
+
+            if (isRepeatPress (b, monitorText)) { acted = true; continue; }   // a bounce would toggle it straight back
 
             c.type = Command::Type::ToggleParam;
         }
@@ -870,6 +881,24 @@ juce::String MidiRouter::sceneBindingText (const std::string& paramId) const
                    + (b.mode == Mode::Toggle ? " tgl" : "");
 
     return {};
+}
+
+bool MidiRouter::isRepeatPress (const Binding& b, const juce::String& monitorText)
+{
+    const std::string key = b.param + (b.mode == Mode::Toggle ? "#toggle" : "");
+
+    if (presses.accept (key, juce::Time::getMillisecondCounter()))
+        return false;
+
+    addLog (monitorText + "  (ignored: repeat within " + juce::String ((int) presses.windowMs()) + " ms)");
+    logEvent ("Footswitch bounce ignored: " + b.text);
+    return true;
+}
+
+void MidiRouter::logEvent (const juce::String& line)
+{
+    if (auto* log = events.load())
+        log->add (line);
 }
 
 void MidiRouter::addLog (const juce::String& line)

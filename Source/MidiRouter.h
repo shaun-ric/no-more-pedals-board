@@ -11,6 +11,8 @@
 #include <utility>
 #include <vector>
 
+#include "Core/EventLog.h"
+#include "Core/PressFilter.h"
 #include "Core/Rig.h"
 
 // Turns incoming MIDI into rig commands.
@@ -77,6 +79,9 @@ public:
     // GUI thread: the monitor lines since the last call, oldest first.
     juce::StringArray takeLog();
 
+    // Where footswitch presses and ignored bounces are recorded (set once at startup; may be null).
+    void setEventLog (EventLog* log) noexcept { events.store (log); }
+
 private:
     enum class Mode { Set, Toggle };
 
@@ -114,7 +119,15 @@ private:
     void finishSceneSwitch();
     void addLog (const juce::String& line);
 
+    // Footswitch debounce: true (and the press is reported as ignored) if this binding was pressed within
+    // the last 150 ms. Used for presses only: setlist next/previous, footswitch buttons, scene preset
+    // recalls and toggles. Settings set by value (an expression pedal) are never filtered.
+    bool isRepeatPress (const Binding& b, const juce::String& monitorText);
+    void logEvent (const juce::String& line);
+
     Rig& rig;
+    PressFilter presses;
+    std::atomic<EventLog*> events { nullptr };
 
     std::vector<Binding> sceneBindings;    // message thread only
     std::vector<Binding> globalBindings;   // message thread only: setlist next and previous
