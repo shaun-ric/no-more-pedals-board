@@ -119,6 +119,8 @@ protected:
 private:
     Param* level = nullptr;   // makes up the level the normalised IR loses
     float lastGain = 1.0f;
+    static constexpr int maxChunk = 128;   // the convolution's block size: see prepare()
+    int chunk = maxChunk;
     juce::dsp::Convolution convolution;
     std::atomic<bool> loaded { false };
 

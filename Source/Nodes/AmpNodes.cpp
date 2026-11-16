@@ -141,9 +141,15 @@ IrNode::IrNode (const std::string& id, const juce::String& name, ParamRegistry& 
     level = addNumber ("level", "Level", -24.0f, 24.0f, 10.0f, 0.5f, " dB");
 }
 
+// JUCE's convolution does a full FFT of its prepared block size on every call, however few samples it is
+// given. The graph is prepared for 2048-sample blocks (headroom for odd driver buffers), so with the rig's
+// 128-sample buffer each cab did a 4096-point FFT per callback. It is now prepared for at most 128 samples and
+// fed in pieces of that size: the same output, about a fifth of the cost (measured on a desktop CPU, 2048 to
+// 48000-sample IRs). See README section 40.
 void IrNode::prepare (double sr, int maxBlock)
 {
-    convolution.prepare ({ sr, (juce::uint32) maxBlock, 1 });
+    chunk = juce::jmax (1, juce::jmin (maxBlock, maxChunk));
+    convolution.prepare ({ sr, (juce::uint32) chunk, 1 });
     convolution.reset();
 }
 
@@ -187,7 +193,13 @@ void IrNode::process (juce::AudioBuffer<float>& b, int n)
 
     float* ch[1] = { b.getWritePointer (0) };
     juce::dsp::AudioBlock<float> block (ch, 1, (size_t) n);
-    convolution.process (juce::dsp::ProcessContextReplacing<float> (block));
+
+    // Never more than the prepared size at once: JUCE writes past its buffers if it is given more.
+    for (int start = 0; start < n; start += chunk)
+    {
+        auto piece = block.getSubBlock ((size_t) start, (size_t) juce::jmin (chunk, n - start));
+        convolution.process (juce::dsp::ProcessContextReplacing<float> (piece));
+    }
 
     const float gain = juce::Decibels::decibelsToGain (level->get());
     b.applyGainRamp (0, 0, n, lastGain, gain);
