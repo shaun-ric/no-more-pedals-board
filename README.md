@@ -468,3 +468,15 @@ The pitch detection is tested on synthetic guitar-like tones (within 1.5 cents);
 The Diagnostics tab now lists every node with its mean and peak time per audio block, as a percentage of the buffer deadline, the costliest first, since **Reset stats** was last pressed. It shows which node is behind a high peak (the 54% peak measured earlier has not been explained yet). Measuring costs two clock reads per node per block.
 
 To use it: load the heaviest song (Still into You), press Reset stats, play for two minutes, and note the top three lines. If a Cab IR's peak is far above its mean, that points at the IR's block size (see `docs/code-review-2026-11-11.md`, section C).
+
+## 39. Master output volume
+
+A master volume for each interface output, kept outside scenes: it stays where you put it whatever song, scene or part is playing, and is remembered between runs (`settings.json`, `masterDb`).
+
+- **Stage tab:** channel strips on the right, one per output, each with the output's name, a level meter, a vertical fader and its value. The **>** button at the top minimises them to thin level meters; touch them (or **<**) to open them again. Whether they are minimised is remembered.
+- **Setup tab:** the same volumes as one row per output (name, slider, level meter), above the switching times. Moving either one moves the other.
+- **The range is Off (bottom) to 0 dB (top).** It can only turn an output down: every output already has a limiter, and the master comes after it, so it can never push an output past the limiter. The default is 0 dB, so nothing changes until you move a fader.
+- **Stage-safe:** touching the fader's track does not jump the volume there; only dragging the fader moves it. Double-tap a fader to return it to 0 dB. The mouse wheel does not move it. Changes are ramped over one audio block, so moving a fader does not click.
+- The meters show what actually leaves each output, after the master. They turn red at -3 dBFS and stay red for two seconds after the output reaches its limiter (-1 dBFS).
+- Each change is written to the event log when the fader is let go ("Master volume, Output 1: -6.0 dB").
+- The loopback latency test (Diagnostics) ignores the master volume, so its click always reaches the input at the same level.

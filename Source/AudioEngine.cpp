@@ -89,6 +89,30 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
                         outputChannelData[c][i] *= g;
             }
         }
+
+        // Master output volume, ramped from the last block's gain so a fader move never clicks. Not in the
+        // loopback test, whose click must reach the input at a known level.
+        if (! loopbackMode.load())
+        {
+            for (int c = 0; c < juce::jmin (numOutputChannels, maxOutputs); ++c)
+            {
+                const float target = masterGain[(size_t) c].load (std::memory_order_relaxed);
+                float& last = appliedGain[(size_t) c];
+
+                if (outputChannelData[c] != nullptr && (target != 1.0f || last != 1.0f))
+                {
+                    const float step = (target - last) / (float) numSamples;
+                    for (int i = 0; i < numSamples; ++i)
+                        outputChannelData[c][i] *= last + step * (float) (i + 1);
+                }
+
+                last = target;
+            }
+        }
+
+        for (int c = 0; c < juce::jmin (numOutputChannels, maxOutputs); ++c)
+            if (outputChannelData[c] != nullptr)
+                outputMeters[(size_t) c].push (outputChannelData[c], numSamples);
     }
 
     const auto elapsedTicks = juce::Time::getHighResolutionTicks() - startTicks;

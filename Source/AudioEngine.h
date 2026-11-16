@@ -7,6 +7,7 @@
 #include <atomic>
 #include <climits>
 
+#include "Core/PeakMeter.h"
 #include "Core/Rig.h"
 
 // The audio device callback. It runs the rig's graph, follows the rig's output fade, and
@@ -14,7 +15,11 @@
 class AudioEngine : public juce::AudioIODeviceCallback
 {
 public:
-    explicit AudioEngine (Rig& rigToRun) : rig (rigToRun) {}
+    explicit AudioEngine (Rig& rigToRun) : rig (rigToRun)
+    {
+        for (auto& g : masterGain) g.store (1.0f);
+        appliedGain.fill (1.0f);
+    }
 
     void audioDeviceAboutToStart (juce::AudioIODevice* device) override;
     void audioDeviceStopped() override {}
@@ -37,6 +42,19 @@ public:
     int readTunerSamples (float* dest, int max);  // message thread: takes up to `max` queued samples
     double currentSampleRate() const noexcept { return sampleRate.load(); }
 
+    // Master output volume (README section 39): one gain per interface output, after the scene's own output
+    // levels, limiters and the output fade, and kept outside scenes (settings.json). The GUI sets the target;
+    // the audio thread ramps to it across one block, so moving a fader never clicks. 1.0 (0 dB) is the most:
+    // the outputs are already limited, so the master can only turn them down, never past the limiter.
+    // `outputMeters` hold the level actually leaving each output, after the master.
+    static constexpr int maxOutputs = 16;
+    void setMasterGain (int channel, float gain) noexcept
+    {
+        if (channel >= 0 && channel < maxOutputs)
+            masterGain[(size_t) channel].store (juce::jlimit (0.0f, 1.0f, gain), std::memory_order_relaxed);
+    }
+    std::array<PeakMeter, (size_t) maxOutputs> outputMeters;
+
     // Loopback test. While on, the rig is not run.
     std::atomic<bool> loopbackMode { false };
     std::atomic<int> loopbackInput { 0 };
@@ -55,6 +73,9 @@ private:
     int bufferCapacity = 0;
 
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> safety;
+
+    std::array<std::atomic<float>, (size_t) maxOutputs> masterGain {};   // set to 1 in the constructor
+    std::array<float, (size_t) maxOutputs> appliedGain {};               // audio thread only
 
     int loopCounter = 0;
     int sinceFire = -1;

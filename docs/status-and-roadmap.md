@@ -9,6 +9,9 @@ VSTi nodes with note path; delete node preset / scene preset / scene; setlist en
 ## Built 2026-11-16, not yet confirmed on the rig (README sections 35-38)
 Gapless part changes (with the Setup fallback toggle), preset cache, EQ and delay smoothing, tuner, per-node CPU timing, per-key warnings, dry-leak rule for unlisted connections, IR swap without the 300 ms wait, plugin state in presets, MIDI output port checks. Listen first for clicks on part changes that switch amp captures.
 
+## Built 2026-11-16 on branch feature/master-output-volume, not yet confirmed on the rig (README section 39)
+Master output volume per output, outside scenes: Stage channel strips (minimisable) and Setup rows.
+
 ## Known issues / unverified
 - Output 2 meter anomaly: owner to retest, noting which meter row reads 0/-inf with and without a model.
 - Possible transient on re-enabling a capture (amp has no `onActivate` reset). More exposed since part changes stopped muting the outputs (README section 35).

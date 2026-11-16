@@ -318,6 +318,13 @@ MainComponent::MainComponent()
     };
     addChildComponent (stageView);
 
+    // Master output volume: the same values on the Stage strips and the Setup rows.
+    stageStrips.onChange = [this] (int c, float db) { setMasterDb (c, db); setupStrips.setDb (c, db); };
+    setupStrips.onChange = [this] (int c, float db) { setMasterDb (c, db); stageStrips.setDb (c, db); };
+    stageStrips.onCollapsedChanged = [this] (bool) { saveSettings(); };
+    addChildComponent (stageStrips);
+    addChildComponent (setupStrips);
+
     // The mouse wheel never changes a setting: it only scrolls.
     for (auto* box : { &loopInBox, &loopOutBox, &sceneBox, &scenePresetBox })
         box->setScrollWheelEnabled (false);
@@ -497,6 +504,7 @@ MainComponent::MainComponent()
     addAndMakeVisible (editHint);
 
     loadSettings();   // after the sliders exist: switching times and the current setlist
+    refreshOutputChannels();   // the master output strips, with the volumes just loaded
 
     if (startup.index >= 0)
         setlists.markPlaying (startup.index);   // its scene was selected above
@@ -534,6 +542,8 @@ void MainComponent::updateTabVisibility()
 
     playView.setVisible (play);
     stageView.setVisible (stage);
+    stageStrips.setVisible (stage);
+    setupStrips.setVisible (setup);
     if (playMeter != nullptr) playMeter->setVisible (play);
 
     for (juce::Component* c : { (juce::Component*) &sceneLabel, (juce::Component*) &scenePresetLabel,
@@ -575,6 +585,8 @@ void MainComponent::changeListenerCallback (juce::ChangeBroadcaster* source)
 {
     if (source == &deviceManager)
     {
+        refreshOutputChannels();   // the device's outputs may have changed
+
         // Only a change made by hand on the Setup tab picks a new device to keep. Changes made anywhere else
         // are the app's own reconnection attempts, or the driver falling back to another device.
         if (currentTab() == tabSetup)
@@ -761,8 +773,16 @@ void MainComponent::resized()
     switch (currentTab())
     {
         case tabStage:
+        {
+            const int w = stageStrips.preferredWidth();
+            if (w > 0)
+            {
+                stageStrips.setBounds (area.removeFromRight (w));
+                area.removeFromRight (8);
+            }
             stageView.setBounds (area);
             break;
+        }
 
         case tabPlay:   // Play
         {
@@ -842,6 +862,9 @@ void MainComponent::resized()
         {
             midiBox.setBounds (area.removeFromRight (460));
             area.removeFromRight (12);
+
+            setupStrips.setBounds (area.removeFromBottom (setupStrips.preferredHeight()));
+            area.removeFromBottom (8);
 
             auto fades = area.removeFromBottom (142);
             area.removeFromBottom (8);
@@ -1409,6 +1432,16 @@ void MainComponent::loadSettings()
         if (auto* p = rig.params().find ("rig/presetMute"))
             p->set (mute ? 1.0f : 0.0f);
         presetMuteToggle.setToggleState (mute, juce::dontSendNotification);
+
+        if (const auto* list = v.getProperty ("masterDb", juce::var()).getArray())
+            for (int c = 0; c < juce::jmin (list->size(), AudioEngine::maxOutputs); ++c)
+            {
+                const float db = juce::jlimit (OutputStrips::offDb, OutputStrips::maxDb, (float) (double) (*list)[c]);
+                masterDb[(size_t) c] = db;
+                engine.setMasterGain (c, OutputStrips::gainFor (db));
+            }
+        loggedMasterDb = masterDb;
+        stageStrips.setCollapsed ((bool) v.getProperty ("outputStripsMinimised", juce::var (false)));
         setlists.load (v.getProperty ("setlist", juce::var()).toString());
         slotCount = juce::jlimit (1, SlotsPanel::maxSlots, (int) v.getProperty ("slots", juce::var (8)));
         savedEntry = (int) v.getProperty ("entry", juce::var (-1));
@@ -1442,6 +1475,43 @@ MainComponent::StartupEntry MainComponent::readStartupEntry() const
     return e;
 }
 
+// ===== Master output volume (README section 39) ==========================================================
+
+void MainComponent::setMasterDb (int channel, float db)
+{
+    if (channel < 0 || channel >= AudioEngine::maxOutputs)
+        return;
+
+    masterDb[(size_t) channel] = db;
+    engine.setMasterGain (channel, OutputStrips::gainFor (db));
+    masterDirty = true;   // saved and logged by logChanges() when the fader is let go
+}
+
+// The strips follow the device's active outputs, named as the driver names them, in the order the audio
+// callback sees them (which is the order the master gains are applied in).
+void MainComponent::refreshOutputChannels()
+{
+    juce::StringArray names;
+
+    if (auto* device = deviceManager.getCurrentAudioDevice())
+    {
+        const auto all = device->getOutputChannelNames();
+        const auto active = device->getActiveOutputChannels();
+
+        for (int i = 0; i <= active.getHighestBit(); ++i)
+            if (active[i])
+                names.add (i < all.size() && all[i].isNotEmpty() ? all[i] : "Output " + juce::String (i + 1));
+    }
+
+    if (names == lastOutputNames)
+        return;
+
+    lastOutputNames = names;
+    stageStrips.setChannels (names, masterDb);
+    setupStrips.setChannels (names, masterDb);
+    resized();
+}
+
 void MainComponent::saveSettings()
 {
     auto* o = new juce::DynamicObject();
@@ -1449,6 +1519,13 @@ void MainComponent::saveSettings()
     o->setProperty ("captureFadeMs", captureFadeSlider.getValue());
     o->setProperty ("connectionFadeMs", connectionFadeSlider.getValue());
     o->setProperty ("presetMute", presetMuteToggle.getToggleState());
+    {
+        juce::Array<juce::var> list;
+        for (const float db : masterDb)
+            list.add ((double) db);
+        o->setProperty ("masterDb", list);   // master output volume per interface output, in dB (-60 = off)
+    }
+    o->setProperty ("outputStripsMinimised", stageStrips.isCollapsed());
     o->setProperty ("setlist", setlists.hasSetlist() ? setlists.setlist().id : juce::String());
     o->setProperty ("slots", slotCount);
     o->setProperty ("entry", savedEntry);                 // the song to come back to at startup
@@ -1577,6 +1654,22 @@ void MainComponent::tunerTick()
 // warnings, late audio blocks and driver dropouts. Called by the UI timer, four times a second.
 void MainComponent::logChanges()
 {
+    // Saved and logged once the fader is let go, so a drag writes one line to the event log, not dozens.
+    if (masterDirty && ! juce::ModifierKeys::currentModifiers.isAnyMouseButtonDown())
+    {
+        masterDirty = false;
+        saveSettings();
+
+        for (int c = 0; c < AudioEngine::maxOutputs; ++c)
+            if (masterDb[(size_t) c] != loggedMasterDb[(size_t) c])
+            {
+                const juce::String name = c < lastOutputNames.size() ? lastOutputNames[c] : "Output " + juce::String (c + 1);
+                events.add ("Master volume, " + name + ": " + OutputStrips::textFor (masterDb[(size_t) c]));
+            }
+
+        loggedMasterDb = masterDb;
+    }
+
     if (! deviceLost)
     {
         const juce::String device = describeDevice();

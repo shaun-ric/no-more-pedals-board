@@ -5,14 +5,14 @@ Read this first, then `docs/architecture.md` (how the code is organised and the 
 ## Repository (since 2026-11-12)
 - This repository, `shaun-ric/no-more-pedals-board`, is the source of truth for the code. The root is the CMake project (`CMakeLists.txt`, `Source/`); `tools/` holds the scripts; `docs/` holds the project notes.
 - NeuralAmpModelerCore is a git submodule at `third_party/NeuralAmpModelerCore`, pinned to a commit the code was checked against. Change the pin deliberately and say so.
-- Work on a branch per change and open a pull request; the owner merges and pulls in GitHub Desktop on Windows. This replaces sending `RigBench.zip`.
+- Work on a feature branch per change and push it. **Do not open a pull request unless the owner asks for one**: the owner decides whether to raise it (owner request, 2026-11-16). The owner merges and pulls in GitHub Desktop on Windows. This replaces sending `RigBench.zip`.
 - The ASIO SDK, build output and the owner's `Documents\RigBench` library (captures, IRs, presets) are not in this repository.
 
 ## What this is
 RigBench is a custom live guitar rig host for one player's stage rig: C++20, JUCE 8.0.6, NeuralAmpModelerCore (NAM). It replaces a pedalboard. It runs on a GMKtec mini PC (Intel N97, AVX2) on Windows 11 with an M-Audio Duo (ASIO). The owner is not a C++ specialist; they build on Windows, test on the real rig, and report back.
 
 ## Environment you work in
-- Code in `Source/`, with `Source/Core`, `Source/Nodes`. `README.md` has numbered sections (1-38) per feature; add a new numbered section for every user-visible change.
+- Code in `Source/`, with `Source/Core`, `Source/Nodes`. `README.md` has numbered sections (1-39) per feature; add a new numbered section for every user-visible change.
 - You cannot run the app, hear audio or use Windows. Verification you CAN do: `g++ -std=c++20 -fsyntax-only` against a JUCE 8.0.6 checkout (`-I<juce>/modules -DJUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1`), and the standalone harnesses in `tools/` that link `Source/Core/Graph.cpp` (add `-DJUCE_USE_CURL=0` when building `juce_unity.cpp`). `NamProcessor.cpp` also needs NAM's include paths and Eigen (NAM fetches Eigen from GitLab; a GitHub mirror works if GitLab is unreachable). Python is available for generating and validating library JSON.
 - The owner downloads `PopPunkSet.zip` (library files for `Documents\RigBench`). Always say which files changed and whether they overwrite things the owner may have edited.
 
@@ -39,4 +39,4 @@ Scripts live under `tools/` (see `tools/README.md`): `gen_poppunk_library.py` ge
 - The owner wants an agentic workflow from here on: take a request, do the work, verify what can be verified, deliver files, and report concisely.
 
 ## Definition of done for a change
-`tools/ci_check.sh` passes (the pull request's Validate check is green); README section added; pull request opened against `main`; any library JSON validated by script (all node ids, edge ids and file references resolve); the pull request states test steps and known risks.
+`tools/ci_check.sh` passes (the branch's Validate check is green); README section added; the feature branch is pushed (a pull request only if the owner asks); any library JSON validated by script (all node ids, edge ids and file references resolve); the report to the owner states test steps and known risks.

@@ -23,6 +23,7 @@
 #include "SetlistPanel.h"
 #include "PluginWindow.h"
 #include "StageView.h"
+#include "OutputStrips.h"
 
 class MainComponent : public juce::Component,
                       private juce::Timer,
@@ -117,6 +118,16 @@ private:
     // Tabs: 0 Play, 1 Stage, 2 Edit, 3 Setlist, 4 Setup, 5 Diagnostics
     enum Tab { tabPlay = 0, tabStage, tabEdit, tabSetlist, tabSetup, tabDiagnostics };
     StageView stageView;
+
+    // ---- Master output volume (README section 39): per interface output, outside scenes, in settings.json.
+    OutputStrips stageStrips { engine, OutputStrips::Style::stage };
+    OutputStrips setupStrips { engine, OutputStrips::Style::setup };
+    std::vector<float> masterDb = std::vector<float> ((size_t) AudioEngine::maxOutputs, 0.0f);
+    std::vector<float> loggedMasterDb = masterDb;
+    juce::StringArray lastOutputNames;
+    bool masterDirty = false;
+    void setMasterDb (int channel, float db);
+    void refreshOutputChannels();
     int slotCount = 8;   // footswitch buttons, saved in settings.json
     // Global switching times (Setup tab), saved in settings.json.
     juce::Label captureFadeLabel, connectionFadeLabel;
