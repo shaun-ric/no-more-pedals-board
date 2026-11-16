@@ -24,6 +24,7 @@
 - `presets/<nodeType>/<id>.preset.json`: node preset `{version,id,name,nodeType,slot,values{},file?}`; `file` is `lib:NAM/...` or `lib:IR/...`.
 - `setlists/<id>.setlist.json`: `{version,name,entries[{scene,preset,name,slots[8]}]}`; slot i = preset id for button i+1.
 - `midi-map.json`: global bindings.
+- `settings.json` (owner settings, outside scenes, in the library root): switching times, `presetMute`, current setlist and entry, `slots`, `masterDb` (master output volume per interface output, dB, -60 = off), `outputStripsMinimised`.
 
 ## Behaviours that bite
 - A scene preset only lists nodes it uses; unlisted nodes return to defaults and switch off. Defaults therefore matter (e.g. `passthrough` is true by default).
@@ -34,6 +35,7 @@
 - Scene preset recall (`Rig::applyScenePreset`) plans every target value first and writes only the differences. It mutes the outputs only if a file or plugin state must load, or `rig/presetMute` is on. Anything that changes audibly must therefore ramp by itself (edges, node on/off, EQ glide, per-block gain ramps).
 - `Library` caches scenes, node presets and scene presets in memory, keyed by `revision`; `rereadFromDisk()` (called on every scene selection) picks up outside edits. Anything that writes library files must bump `revision`.
 - Problems are kept per key in `Rig` (`setProblem`), not as one status string; clear the key when the thing works again.
+- Master output volume is applied in `AudioEngine` after the graph and the output fade, per callback output index (active outputs in order, the same indexing the graph uses). Capped at 0 dB so it can never undo the output limiters. `OutputStrips.h` draws it on Stage and Setup; the two share `AudioEngine::outputMeters`, so only the visible one reads them.
 - Windows macro clashes (e.g. `interface`) have caused compile errors before; avoid such identifiers.
 
 ## Pop-Punk Set library (generated)

@@ -469,12 +469,23 @@ The Diagnostics tab now lists every node with its mean and peak time per audio b
 
 To use it: load the heaviest song (Still into You), press Reset stats, play for two minutes, and note the top three lines. If a Cab IR's peak is far above its mean, that points at the IR's block size (see `docs/code-review-2026-11-11.md`, section C).
 
-## 39. Steadier tuner, one job per switch, setlist checks
+## 39. Master output volume
+
+A master volume for each interface output, kept outside scenes: it stays where you put it whatever song, scene or part is playing, and is remembered between runs (`settings.json`, `masterDb`).
+
+- **Stage tab:** channel strips on the right, one per output, each with the output's name, a level meter, a vertical fader and its value. The **>** button at the top minimises them to thin level meters; touch them (or **<**) to open them again. Whether they are minimised is remembered.
+- **Setup tab:** the same volumes as one row per output (name, slider, level meter), above the switching times. Moving either one moves the other.
+- **The range is Off (bottom) to 0 dB (top).** It can only turn an output down: every output already has a limiter, and the master comes after it, so it can never push an output past the limiter. The default is 0 dB, so nothing changes until you move a fader.
+- **Stage-safe:** touching the fader's track does not jump the volume there; only dragging the fader moves it. Double-tap a fader to return it to 0 dB. The mouse wheel does not move it. Changes are ramped over one audio block, so moving a fader does not click.
+- The meters show what actually leaves each output, after the master. They turn red at -3 dBFS and stay red for two seconds after the output reaches its limiter (-1 dBFS).
+- Each change is written to the event log when the fader is let go ("Master volume, Output 1: -6.0 dB").
+- The loopback latency test (Diagnostics) ignores the master volume, so its click always reaches the input at the same level.
+## 40. Steadier tuner, one job per switch, setlist checks
 
 - **The tuner is steadier.** Each reading is now the median of the last seven (about half a second), eased towards rather than jumped to, so a single wild reading (the pick attack, or an octave jump as the string dies away) no longer moves the needle. A new note takes over after three readings agree on it, and the last reading is held for about half a second after the string stops. The cost is that the needle takes about half a second to settle after a pluck.
 - **A switch does one job.** Learning a switch or pedal for anything (a footswitch button, Next or Previous, the tuner, or a setting in a scene) now takes that message away from whatever it did before, and the MIDI monitor says what it no longer does. Before, learning the tuner on a message that a scene setting already used left both bound. If a scene saved earlier still uses a message that a footswitch, setlist or tuner switch now sends, the switch wins and the monitor lists the scene setting that is not used.
 - **Setlist entries are checked.** When a setlist is loaded or edited, every entry is checked for a scene that does not exist, or a starting or footswitch preset that its scene does not have. Problems are shown on the status strip (the first three) and written to the event log in full, and the warning clears once the setlist is put right. The warning for a missing scene preset now also names the scene it looked in ("No scene preset the-middle-main in scene Marshall").
 
-## 40. Cab IRs cost about a fifth as much CPU
+## 41. Cab IRs cost about a fifth as much CPU
 
 Each Cab IR node was using about 6.5% of the buffer deadline on average (Diagnostics, Still into You, 16 November), because JUCE's convolution was set up for 2048-sample blocks and does a full transform of that size on every 128-sample callback. It is now set up for 128 samples and fed in pieces of that size, which gives the same sound for about a fifth of the work (measured on a desktop CPU with IRs of 2048 to 48000 samples: 120 to 125 microseconds per callback before, 17 to 39 after). On the rig, the two cabs in Still into You should drop from about 13% of the deadline together to around 3%. Nothing else changes: the IR still has no latency, and changing IR still crossfades.
