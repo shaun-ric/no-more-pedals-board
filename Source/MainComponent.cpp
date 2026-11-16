@@ -1510,6 +1510,8 @@ void MainComponent::refreshOutputChannels()
     stageStrips.setChannels (names, masterDb);
     setupStrips.setChannels (names, masterDb);
     resized();
+}
+
 // Setlist entries that point at a scene or scene preset that is not there, shown on the status strip and
 // written to the event log, so a wrong entry is found before the gig rather than at the song.
 void MainComponent::reportSetlistProblems()

@@ -145,7 +145,7 @@ IrNode::IrNode (const std::string& id, const juce::String& name, ParamRegistry& 
 // given. The graph is prepared for 2048-sample blocks (headroom for odd driver buffers), so with the rig's
 // 128-sample buffer each cab did a 4096-point FFT per callback. It is now prepared for at most 128 samples and
 // fed in pieces of that size: the same output, about a fifth of the cost (measured on a desktop CPU, 2048 to
-// 48000-sample IRs). See README section 40.
+// 48000-sample IRs). See README section 41.
 void IrNode::prepare (double sr, int maxBlock)
 {
     chunk = juce::jmax (1, juce::jmin (maxBlock, maxChunk));
