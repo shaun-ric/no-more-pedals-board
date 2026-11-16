@@ -10,6 +10,7 @@
 
 #include "AudioEngine.h"
 #include "Core/EventLog.h"
+#include "Core/PitchDetector.h"
 #include "Core/Rig.h"
 #include "LevelMeter.h"
 #include "MidiRouter.h"
@@ -78,10 +79,11 @@ private:
     };
     void setTuner (bool on);
     void tunerTick();
+    void reportSetlistProblems();
     TickTimer tunerTimer;
     std::vector<float> tunerWindow;   // the most recent input, oldest first
-    int tunerFilled = 0, tunerQuiet = 0;
-    double tunerHz = 0.0;
+    int tunerFilled = 0;
+    pitch::Smoother tunerSmoother;
     juce::Label tunerLabel;
     juce::TextButton tunerLearn { "MIDI" }, tunerClear { "x" };
 

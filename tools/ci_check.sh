@@ -61,8 +61,10 @@ expect t3 "commit 1 ''" "ok"
 expect t4 "broken: written 0 unchanged 1 readable 0" "good: written 1 kept 1 added 1" "new: written 1 readable 1" "same: 1 0 1 0"
 # Footswitch debounce (150 ms, per switch, safe across the counter wrap) and the event log (queued, flushed, old files removed).
 expect t5 "debounce: 1 0 1 1 0" "wrap: 1 0 1" "log: before-flush 0 old-deleted 1 recent-kept 1" "log: lines 2 first 1 second 1 stamped 1"
-# Tuner pitch detection (open strings, drop D, a sharp string; silence and noise have no pitch) and the EQ glide (no click).
+# Tuner pitch detection (open strings, drop D, a sharp string; silence and noise have no pitch), the tuner smoothing
+# (steady reading, octave jumps ignored, a new note taken after 3 readings) and the EQ glide (no click).
 expect t6 "pitch: found 9 of 9, worst error under 1.5 cents 1" "notes: E2 A2 +12 G3 -30" "no pitch: silence 1 noise 1" \
+          "smoother: wobble under half of raw 1, no octave jump 1, new note after 3 readings 1, clears after 9 quiet 1" \
           "eq glide: smooth 1 jump-would-click 1 settles 1 same-end 1" "eq off: skipped 1 untouched 1"
 # Which connections a scene preset switches on (no dry leak from an amp added in parallel, no break from a pedal added
 # in series), and the presets held in memory.
