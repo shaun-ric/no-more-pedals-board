@@ -55,6 +55,49 @@ int main()
     std::printf ("no pitch: silence %d noise %d\n", (int) ! pitch::detect (silence.data(), n, sr).found,
                  (int) ! pitch::detect (noise.data(), n, sr).found);
 
+    // ---- Smoother ---------------------------------------------------------------------------------------
+    // An A string 4 cents flat, read with +-8 cents of jitter and every seventh reading an octave too high (the
+    // kind of reading that makes a tuner jump). After settling, the shown pitch must wobble less than half as much
+    // as the readings, and never jump to the octave. A new note (D3) must take over after exactly 3 readings.
+    {
+        pitch::Smoother sm;
+        const double truth = 110.0 * std::pow (2.0, -4.0 / 1200.0);
+        std::srand (7);
+        double worstShown = 0.0, shownSq = 0.0, rawSq = 0.0;
+        int counted = 0;
+        for (int i = 0; i < 80; ++i)
+        {
+            const double jitter = ((double) std::rand() / RAND_MAX - 0.5) * 16.0;
+            const double reading = (i % 7 == 6) ? truth * 2.0 : truth * std::pow (2.0, jitter / 1200.0);
+            const double shown = sm.add (reading);
+            if (i >= 10)
+            {
+                const double e = centsOff (shown, truth);
+                worstShown = std::max (worstShown, std::abs (e));
+                shownSq += e * e;
+                if (i % 7 != 6)
+                {
+                    rawSq += jitter * jitter;
+                    ++counted;
+                }
+            }
+        }
+        const double shownRms = std::sqrt (shownSq / 70.0), rawRms = std::sqrt (rawSq / counted);
+
+        const double d3 = 146.832;
+        const bool held1 = std::abs (centsOff (sm.add (d3), truth)) < 5.0;
+        const bool held2 = std::abs (centsOff (sm.add (d3), truth)) < 5.0;
+        const bool moved = std::abs (centsOff (sm.add (d3), d3)) < 0.5;
+
+        int quietTicks = 0;
+        while (sm.quiet() > 0.0 && quietTicks < 100)
+            ++quietTicks;
+
+        std::printf ("smoother: wobble under half of raw %d, no octave jump %d, new note after 3 readings %d, clears after 9 quiet %d\n",
+                     (int) (shownRms < 0.5 * rawRms), (int) (worstShown < 6.0), (int) (held1 && held2 && moved), (int) (quietTicks == 8));
+        std::printf ("smoother detail: raw rms %.1f, shown rms %.1f, worst %.1f cents\n", rawRms, shownRms, worstShown);
+    }
+
     // ---- EQ glide ---------------------------------------------------------------------------------------
     // A steady 100 Hz tone through a low shelf that is switched from +12 dB to -12 dB mid-stream. A click shows
     // as a sample-to-sample step larger than any the tone itself makes. With the glide there must be none;

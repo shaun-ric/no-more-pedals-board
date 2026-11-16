@@ -28,6 +28,42 @@ public:
         return true;
     }
 
+    // Entries that point at something their scene does not have: a scene that is gone, or a starting preset
+    // or footswitch preset that is not one of the scene's presets. One line per problem, for the status strip.
+    juce::StringArray problems() const
+    {
+        juce::StringArray out;
+
+        for (size_t i = 0; i < current.entries.size(); ++i)
+        {
+            const auto& e = current.entries[i];
+            const juce::String song = "Song " + juce::String ((int) i + 1)
+                                    + (e.name.isNotEmpty() ? " (" + e.name + ")" : juce::String());
+
+            if (! library.sceneFile (e.scene).existsAsFile())
+            {
+                out.add (song + ": scene " + e.scene + " does not exist");
+                continue;
+            }
+
+            juce::StringArray presetIds;
+            for (const auto& p : library.listScenePresets (e.scene))
+                presetIds.add (p.id);
+
+            juce::StringArray missing;
+            if (e.preset.isNotEmpty() && ! presetIds.contains (e.preset))
+                missing.addIfNotAlreadyThere (e.preset);
+            for (const auto& slot : e.slots)
+                if (slot.isNotEmpty() && ! presetIds.contains (slot))
+                    missing.addIfNotAlreadyThere (slot);
+
+            if (! missing.isEmpty())
+                out.add (song + ": scene " + e.scene + " has no preset " + missing.joinIntoString (", "));
+        }
+
+        return out;
+    }
+
     // Re-reads the current setlist after it was edited.
     void reload()
     {
