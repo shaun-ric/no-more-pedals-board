@@ -58,8 +58,32 @@ public:
     virtual void setTextValue (const juce::String&) {}
 
     // Called (not on the audio thread) after a preset's settings were applied to this node, for nodes
-    // that do something at that moment (the MIDI output node sends its messages).
-    virtual void presetApplied() {}
+    // that do something at that moment (the MIDI output node sends its messages). Returns what went wrong,
+    // or an empty string.
+    virtual juce::String presetApplied() { return {}; }
+
+    // How long run() takes, measured by the graph on the audio thread (two clock reads per block, no locks).
+    void addTiming (juce::int64 ticks) noexcept
+    {
+        timeSum.fetch_add (ticks, std::memory_order_relaxed);
+        timeCount.fetch_add (1, std::memory_order_relaxed);
+        if (ticks > timeMax.load (std::memory_order_relaxed))
+            timeMax.store (ticks, std::memory_order_relaxed);
+    }
+
+    struct Timing { double meanSeconds = 0.0, maxSeconds = 0.0; };
+
+    Timing timing() const noexcept
+    {
+        Timing t;
+        const auto count = timeCount.load (std::memory_order_relaxed);
+        if (count > 0)
+            t.meanSeconds = juce::Time::highResolutionTicksToSeconds (timeSum.load (std::memory_order_relaxed)) / (double) count;
+        t.maxSeconds = juce::Time::highResolutionTicksToSeconds (timeMax.load (std::memory_order_relaxed));
+        return t;
+    }
+
+    void resetTiming() noexcept { timeSum = 0; timeCount = 0; timeMax = 0; }
 
     // Nodes that take notes (VST3 instruments). The graph hands them the block's MIDI before run().
     virtual bool acceptsMidi() const { return false; }
@@ -117,8 +141,10 @@ public:
 
             if (fadeLen > 0 && dry.getNumSamples() >= numSamples)
             {
+                // Switched again while still fading: carry on from the same level in the other direction,
+                // instead of jumping to the start of a new fade.
+                fadePos = fading ? juce::jlimit (0, fadeLen, fadeLen - fadePos) : 0;
                 fading = true;
-                fadePos = 0;
             }
         }
 
@@ -200,4 +226,6 @@ private:
     double fadeSampleRate = 44100.0;
     Param* fadeMsParam = nullptr;
     juce::AudioBuffer<float> dry;
+    std::atomic<juce::int64> timeSum { 0 }, timeMax { 0 };
+    std::atomic<juce::int64> timeCount { 0 };
 };

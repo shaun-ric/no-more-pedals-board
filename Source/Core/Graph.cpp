@@ -426,7 +426,9 @@ void Graph::process (const float* const* in, int numIn, float* const* out, int n
             }
         }
 
+        const auto started = juce::Time::getHighResolutionTicks();
         node.run (buf, numSamples);
+        node.addTiming (juce::Time::getHighResolutionTicks() - started);
     }
 
     for (const int k : plan->outputs)

@@ -47,7 +47,7 @@ public:
     ParamRegistry& params() noexcept { return registry; }
     Graph& graph() noexcept { return graphObj; }
     NoteBus& notes() noexcept { return noteBus; }   // notes for the VST3 instruments
-    juce::String getStatusMessage() const;   // the latest problem, followed by any lasting notices
+    juce::String getStatusMessage() const;   // every current problem, followed by any lasting notices
 
     // A lasting notice (any thread): stays on the status strip until the app restarts, unlike the status
     // message, which the next successful load clears. For problems that need fixing by hand, such as a
@@ -80,13 +80,18 @@ private:
     void loadPresetFile (const std::string& nodeId, const NodePreset& preset);   // loads a preset's file unless it is already loaded
     int fadeDepth = 0;
     juce::String currentFileRef (const Node& node) const;   // the node's loaded file, as a preset stores it ("lib:..." or a path), or empty
-    juce::String latestProblem() const;                     // the status message without the notices
+
     std::string nodeTypeOf (const std::string& nodeId) const;
-    void setStatus (const juce::String& text);
+    // Current problems, each under a key ("file:<node id>", "scenepreset", ...). A problem stays until the
+    // thing it is about works again (or its node goes), so a file that loaded for one node no longer wipes a
+    // "file not found" for another. An empty text clears the key.
+    void setProblem (const std::string& key, const juce::String& text);
+    void clearNodeProblems (const std::string& nodeId);
 
     void loadNodePreset (const std::string& nodeId, const juce::String& presetId, int slot);
     void loadScenePreset (const juce::String& presetId, int slot);
     void applyScenePreset (const ScenePreset& preset);
+    void applyPluginState (Node& node, const NodePreset& preset);
     void resetToDefaults();
     std::vector<std::pair<std::string, float>> captureValues (const Node& node) const;
 
@@ -98,8 +103,9 @@ private:
     std::deque<Command> queue;
 
     mutable juce::CriticalSection statusLock;
-    juce::String status;
+    std::map<std::string, juce::String> problems;
     juce::StringArray notices;
+    Param* presetMute = nullptr;   // rig/presetMute: mute the outputs for every scene preset change (off by default)
 
     Library* library = nullptr;
     mutable juce::CriticalSection sceneLock;

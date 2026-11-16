@@ -3,8 +3,10 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <functional>
 #include <map>
 #include <memory>
+#include <vector>
 
 #include "AudioEngine.h"
 #include "Core/EventLog.h"
@@ -67,6 +69,27 @@ private:
     juce::uint32 lastRetryMs = 0, blocksStillSinceMs = 0;
     uint64_t lastBlockCount = 0;
     juce::String lastRetryError;
+
+    // ---- Tuner (README section 36) ----------------------------------------------------------------------
+    struct TickTimer : juce::Timer
+    {
+        std::function<void()> onTick;
+        void timerCallback() override { if (onTick) onTick(); }
+    };
+    void setTuner (bool on);
+    void tunerTick();
+    TickTimer tunerTimer;
+    std::vector<float> tunerWindow;   // the most recent input, oldest first
+    int tunerFilled = 0, tunerQuiet = 0;
+    double tunerHz = 0.0;
+    juce::Label tunerLabel;
+    juce::TextButton tunerLearn { "MIDI" }, tunerClear { "x" };
+
+    // Setup tab: the fallback for part changes (README section 35).
+    juce::ToggleButton presetMuteToggle { "Mute the outputs during part changes (the old behaviour: tick this if a part change clicks)" };
+
+    // Every current warning: the rig's own, plus switched-on amps that have no capture loaded.
+    juce::String currentWarnings();
 
     // ---- Event log: only changes are written (README section 33) ---------------------------------------
     void logChanges();

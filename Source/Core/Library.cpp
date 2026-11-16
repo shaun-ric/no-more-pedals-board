@@ -21,6 +21,8 @@ namespace
         out.nodeType = root.getProperty ("nodeType", juce::var()).toString().toStdString();
         out.slot = (int) root.getProperty ("slot", juce::var (0));
         out.file = root.getProperty ("file", juce::var()).toString();
+        out.state = root.getProperty ("state", juce::var()).toString();
+        out.fileStem = f.getFileName().upToLastOccurrenceOf (presetSuffix, false, false);
         out.values.clear();
 
         if (auto* obj = root.getProperty ("values", juce::var()).getDynamicObject())
@@ -42,6 +44,7 @@ namespace
 
         out.name = root.getProperty ("name", juce::var (out.id)).toString();
         out.slot = (int) root.getProperty ("slot", juce::var (0));
+        out.fileStem = f.getFileName().upToLastOccurrenceOf (presetSuffix, false, false);
         out.nodes.clear();
         out.edges.clear();
 
@@ -142,8 +145,30 @@ juce::File Library::scenePresetFolder (const juce::String& sceneId) const
 
 // ---- Node presets ---------------------------------------------------------------------------
 
+void Library::syncCache() const
+{
+    const int r = revision.load();
+    if (r == cacheRevision)
+        return;
+
+    nodePresetCache.clear();
+    scenePresetCache.clear();
+    sceneCache.clear();
+    sceneCacheFilled = false;
+    cacheRevision = r;
+}
+
 std::vector<NodePreset> Library::listNodePresets (const std::string& nodeType) const
 {
+    {
+        const juce::ScopedLock sl (cacheLock);
+        syncCache();
+        const auto it = nodePresetCache.find (nodeType);
+        if (it != nodePresetCache.end())
+            return it->second;
+    }
+
+    const int revisionRead = revision.load();
     std::vector<NodePreset> list;
 
     for (const auto& f : nodePresetFolder (nodeType).findChildFiles (juce::File::findFiles, false, juce::String ("*") + presetSuffix))
@@ -154,13 +179,43 @@ std::vector<NodePreset> Library::listNodePresets (const std::string& nodeType) c
     }
 
     std::sort (list.begin(), list.end(), [] (const NodePreset& a, const NodePreset& b) { return a.slot < b.slot; });
+
+    const juce::ScopedLock sl (cacheLock);
+    syncCache();
+    if (revision.load() == revisionRead)   // nothing was written while the files were being read
+        nodePresetCache[nodeType] = list;
+
     return list;
 }
 
 bool Library::readNodePreset (const std::string& nodeType, const juce::String& id, NodePreset& out) const
 {
-    const auto f = nodePresetFolder (nodeType).getChildFile (id + presetSuffix);
-    return f.existsAsFile() && readNodePresetFile (f, out);
+    // By file name, as before, but from memory. Only the one preset is copied (a plugin's saved state can be large).
+    {
+        const juce::ScopedLock sl (cacheLock);
+        syncCache();
+        const auto it = nodePresetCache.find (nodeType);
+        if (it != nodePresetCache.end())
+        {
+            for (const auto& p : it->second)
+                if (p.fileStem == id)
+                {
+                    out = p;
+                    return true;
+                }
+
+            return false;
+        }
+    }
+
+    for (auto& p : listNodePresets (nodeType))   // first use: reads the folder and fills the memory
+        if (p.fileStem == id)
+        {
+            out = std::move (p);
+            return true;
+        }
+
+    return false;
 }
 
 bool Library::readNodePresetBySlot (const std::string& nodeType, int slot, NodePreset& out) const
@@ -190,6 +245,8 @@ bool Library::writeNodePreset (const NodePreset& preset) const
     o->setProperty ("values", juce::var (values));
     if (preset.file.isNotEmpty())
         o->setProperty ("file", preset.file);
+    if (preset.state.isNotEmpty())
+        o->setProperty ("state", preset.state);
 
     const auto folder = nodePresetFolder (preset.nodeType);
     folder.createDirectory();
@@ -249,6 +306,14 @@ juce::File Library::sceneFile (const juce::String& sceneId) const
 
 std::vector<SceneInfo> Library::listScenes() const
 {
+    {
+        const juce::ScopedLock sl (cacheLock);
+        syncCache();
+        if (sceneCacheFilled)
+            return sceneCache;
+    }
+
+    const int revisionRead = revision.load();
     std::vector<SceneInfo> list;
 
     for (const auto& f : root.getChildFile ("scenes").findChildFiles (juce::File::findFiles, false, juce::String ("*") + sceneSuffix))
@@ -265,6 +330,15 @@ std::vector<SceneInfo> Library::listScenes() const
     }
 
     std::sort (list.begin(), list.end(), [] (const SceneInfo& a, const SceneInfo& b) { return a.name.compareIgnoreCase (b.name) < 0; });
+
+    const juce::ScopedLock sl (cacheLock);
+    syncCache();
+    if (revision.load() == revisionRead)
+    {
+        sceneCache = list;
+        sceneCacheFilled = true;
+    }
+
     return list;
 }
 
@@ -382,6 +456,15 @@ bool Library::writeGraphDef (const juce::File& file, const GraphDef& def) const
 
 std::vector<ScenePreset> Library::listScenePresets (const juce::String& sceneId) const
 {
+    {
+        const juce::ScopedLock sl (cacheLock);
+        syncCache();
+        const auto it = scenePresetCache.find (sceneId);
+        if (it != scenePresetCache.end())
+            return it->second;
+    }
+
+    const int revisionRead = revision.load();
     std::vector<ScenePreset> list;
 
     for (const auto& f : scenePresetFolder (sceneId).findChildFiles (juce::File::findFiles, false, juce::String ("*") + presetSuffix))
@@ -392,13 +475,25 @@ std::vector<ScenePreset> Library::listScenePresets (const juce::String& sceneId)
     }
 
     std::sort (list.begin(), list.end(), [] (const ScenePreset& a, const ScenePreset& b) { return a.slot < b.slot; });
+
+    const juce::ScopedLock sl (cacheLock);
+    syncCache();
+    if (revision.load() == revisionRead)
+        scenePresetCache[sceneId] = list;
+
     return list;
 }
 
 bool Library::readScenePreset (const juce::String& sceneId, const juce::String& id, ScenePreset& out) const
 {
-    const auto f = scenePresetFolder (sceneId).getChildFile (id + presetSuffix);
-    return f.existsAsFile() && readScenePresetFile (f, out);
+    for (auto& p : listScenePresets (sceneId))
+        if (p.fileStem == id)
+        {
+            out = std::move (p);
+            return true;
+        }
+
+    return false;
 }
 
 bool Library::readScenePresetBySlot (const juce::String& sceneId, int slot, ScenePreset& out) const

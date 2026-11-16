@@ -61,8 +61,11 @@ public:
     // Footswitch buttons: "slot:1", "slot:2"... are learned like the setlist ones, are global, and report the
     // button number (from 1) on the message thread. What a button does depends on the song playing.
     std::function<void (int)> onSlot;
+    // The tuner switch: "tuner" is learned like the setlist ones, is global, and is reported on the message thread.
+    std::function<void()> onTuner;
+
     static bool isSlotTarget (const std::string& id);
-    static bool isGlobalTarget (const std::string& id);   // setlist:... and slot:...
+    static bool isGlobalTarget (const std::string& id);   // setlist:..., slot:... and tuner
 
     // MIDI learn (message thread). The next controller or note message binds to the target, which is a
     // setting's ID, "preset:<node id>" or "scenepreset". A toggle binding flips an on/off setting on any

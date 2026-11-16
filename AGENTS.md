@@ -12,12 +12,12 @@ Read this first, then `docs/architecture.md` (how the code is organised and the 
 RigBench is a custom live guitar rig host for one player's stage rig: C++20, JUCE 8.0.6, NeuralAmpModelerCore (NAM). It replaces a pedalboard. It runs on a GMKtec mini PC (Intel N97, AVX2) on Windows 11 with an M-Audio Duo (ASIO). The owner is not a C++ specialist; they build on Windows, test on the real rig, and report back.
 
 ## Environment you work in
-- Code in `Source/`, with `Source/Core`, `Source/Nodes`. `README.md` has numbered sections (1-34) per feature; add a new numbered section for every user-visible change.
+- Code in `Source/`, with `Source/Core`, `Source/Nodes`. `README.md` has numbered sections (1-38) per feature; add a new numbered section for every user-visible change.
 - You cannot run the app, hear audio or use Windows. Verification you CAN do: `g++ -std=c++20 -fsyntax-only` against a JUCE 8.0.6 checkout (`-I<juce>/modules -DJUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1`), and the standalone harnesses in `tools/` that link `Source/Core/Graph.cpp` (add `-DJUCE_USE_CURL=0` when building `juce_unity.cpp`). `NamProcessor.cpp` also needs NAM's include paths and Eigen (NAM fetches Eigen from GitLab; a GitHub mirror works if GitLab is unreachable). Python is available for generating and validating library JSON.
 - The owner downloads `PopPunkSet.zip` (library files for `Documents\RigBench`). Always say which files changed and whether they overwrite things the owner may have edited.
 
 ## Tools
-Scripts live under `tools/` (see `tools/README.md`): `gen_poppunk_library.py` generates the song library, `validate_library.py` must be run after every generation, `syntax_check.sh` checks C++ against JUCE, `test.cpp`/`t2.cpp`/`t3.cpp` are graph harnesses, `t4.cpp` tests library file handling, `t5.cpp` the debounce and event log, and `ci_check.sh` runs all of it (it is the CI validation stage).
+Scripts live under `tools/` (see `tools/README.md`): `gen_poppunk_library.py` generates the song library, `validate_library.py` must be run after every generation, `syntax_check.sh` checks C++ against JUCE, `test.cpp`/`t2.cpp`/`t3.cpp` are graph harnesses, `t4.cpp` tests library file handling, `t5.cpp` the debounce and event log, `t6.cpp` the pitch detector and EQ glide, `t7.cpp` the preset connection rule and the preset cache, and `ci_check.sh` runs all of it (it is the CI validation stage).
 
 ## Working rules
 1. **Be honest about what is verified.** Say "syntax-checked, not run" or "tested by the owner". Never claim audio behaviour you cannot hear (tone, clicks, latency).

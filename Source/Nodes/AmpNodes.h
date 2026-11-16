@@ -42,6 +42,10 @@ public:
     };
     Info getInfo() const;
 
+    // False until a capture has been loaded. A switched-on node without one passes its input through
+    // unprocessed, which the app reports as a warning.
+    bool hasModel() const noexcept { return modelLoaded.load(); }
+
     PeakMeter meterOut;   // the level leaving the amp, after loudness matching
     double getAppliedTrimDb() const noexcept { return appliedTrimDb.load(); }   // loudness matching, in dB
     double getCalibrationDb() const noexcept { return calibrationDb.load(); }   // input calibration from the file, in dB
@@ -49,9 +53,11 @@ public:
 
 protected:
     void process (juce::AudioBuffer<float>& buffer, int numSamples) override;
-    // A switched-off capture is silent by default. It does not pass the dry signal through, so two
-    // captures can sit in parallel and switching one off never lets the clean guitar leak. A capture of
-    // a pedal, which sits in a chain and must let the signal by when it is off, turns on "passthrough".
+    // A switched-off capture passes its input through by default ("passthrough" on), which is what a
+    // capture of a pedal in a chain needs. With "passthrough" off it is silent instead. Captures that sit
+    // in parallel are kept apart by switching their connections off, which scene presets do; a connection
+    // out of a node that a scene preset does not know about is switched off by the rig if it would add
+    // the dry signal to a path that already has one (see Rig::applyScenePreset).
     void processInactive (juce::AudioBuffer<float>& buffer, int numSamples) override
     {
         juce::ignoreUnused (numSamples);
@@ -77,6 +83,7 @@ private:
     std::unique_ptr<NamProcessor> nam;
     std::atomic<double> sampleRate_ { 0.0 };
     std::atomic<int> maxBlock_ { 0 };
+    std::atomic<bool> modelLoaded { false };
 
     mutable juce::CriticalSection infoLock;
     Info info;
@@ -94,7 +101,8 @@ public:
 
     void prepare (double sampleRate, int maxBlockSize) override;
 
-    // Control thread. Waits briefly until the new IR is in place (the caller fades the outputs).
+    // Control thread. Hands the file to JUCE's convolution, which builds the new response on its own
+    // thread and crossfades to it over 50 ms when it is ready, so there is nothing to wait for.
     void loadFile (const juce::File& file);
     juce::String getFileName() const;
 

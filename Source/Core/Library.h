@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <functional>
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
@@ -24,6 +25,8 @@ struct NodePreset
     int slot = 0;                                          // the number a CC value selects
     std::vector<std::pair<std::string, float>> values;     // parameter short name -> value
     juce::String file;                                     // the capture, IR or plugin it uses, as stored ("lib:..." or a path); empty = none
+    juce::String state;                                    // a VST3 plugin's own saved state (base64), so its patch comes back; empty = none
+    juce::String fileStem;                                 // the file's name without ".preset.json" (set when read; not saved)
 };
 
 struct ScenePresetNode
@@ -46,6 +49,7 @@ struct ScenePreset
     int slot = 0;
     std::vector<ScenePresetNode> nodes;
     std::vector<ScenePresetEdge> edges;
+    juce::String fileStem;   // the file's name without ".preset.json" (set when read; not saved)
 };
 
 // A scene's graph: which nodes it has, what each one uses, and how they connect. It is saved in the
@@ -173,9 +177,24 @@ public:
     // Bumped whenever anything is written, so the GUI knows to refresh its lists.
     mutable std::atomic<int> revision { 0 };
 
+    // Scenes, node presets and scene presets are kept in memory after they are first read, so recalling a
+    // preset from a footswitch reads no files. Everything the app writes refreshes this by itself. Files
+    // changed outside the app (edited by hand, or a library copied in) are picked up by this call, which the
+    // app makes every time a scene is selected.
+    void rereadFromDisk() const noexcept { ++revision; }
+
 private:
     juce::File nodePresetFolder (const std::string& nodeType) const;
     juce::File scenePresetFolder (const juce::String& sceneId) const;
 
+    void syncCache() const;   // empties the cache if anything was written since it was filled (cacheLock held)
+
     juce::File root;
+
+    mutable juce::CriticalSection cacheLock;
+    mutable int cacheRevision = -1;
+    mutable std::map<std::string, std::vector<NodePreset>> nodePresetCache;     // by node type
+    mutable std::map<juce::String, std::vector<ScenePreset>> scenePresetCache;  // by scene ID
+    mutable std::vector<SceneInfo> sceneCache;
+    mutable bool sceneCacheFilled = false;
 };

@@ -62,6 +62,7 @@ void NamAmpNode::swapModel (std::unique_ptr<NamProcessor> fresh, const juce::Fil
         const juce::SpinLock::ScopedLockType lock (modelLock);
         std::swap (nam, fresh);
     }
+    modelLoaded = true;
     // `fresh` now holds the old model and is destroyed here, off the lock.
 }
 
@@ -148,20 +149,16 @@ void IrNode::prepare (double sr, int maxBlock)
 
 void IrNode::loadFile (const juce::File& file)
 {
-    const auto oldSize = convolution.getCurrentIRSize();
-
     convolution.loadImpulseResponse (file,
                                      juce::dsp::Convolution::Stereo::no,
                                      juce::dsp::Convolution::Trim::yes,
                                      0,
                                      juce::dsp::Convolution::Normalise::yes);
 
-    // JUCE builds the new convolution engine on a background thread. Wait (briefly) until it is in.
-    const auto start = juce::Time::getMillisecondCounter();
-    while (convolution.getCurrentIRSize() == oldSize && juce::Time::getMillisecondCounter() - start < 300)
-        juce::Thread::sleep (10);
-
-    juce::Thread::sleep (20);
+    // JUCE builds the new convolution engine on a background thread and crossfades to it (50 ms) inside
+    // process() when it is ready. The old code waited here for the response's length to change, which
+    // never happens when the new IR is as long as the old one (usual within one IR pack), so every such
+    // swap held the outputs muted for the full 300 ms time-out.
 
     {
         const juce::ScopedLock sl (nameLock);

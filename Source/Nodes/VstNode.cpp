@@ -74,6 +74,76 @@ std::shared_ptr<juce::AudioPluginInstance> VstNode::instance() const
     return current != nullptr ? current->plugin : nullptr;
 }
 
+juce::String VstNode::stateBase64()
+{
+    const auto plugin = instance();
+    if (plugin == nullptr)
+        return {};
+
+    juce::MemoryBlock block;
+    plugin->getStateInformation (block);
+    const juce::String text = block.toBase64Encoding();
+
+    const juce::ScopedLock sl (infoLock);
+    lastState = text;   // recalling the preset just saved changes nothing, so it need not be applied again
+    return text;
+}
+
+bool VstNode::stateDiffers (const juce::String& state) const
+{
+    const juce::ScopedLock sl (infoLock);
+    return state.isNotEmpty() && state != lastState;
+}
+
+bool VstNode::applyState (const juce::String& state, juce::String& error)
+{
+    const auto plugin = instance();
+    if (plugin == nullptr)
+    {
+        error = "no plugin is loaded to give the saved state to";
+        return false;
+    }
+
+    auto block = std::make_shared<juce::MemoryBlock>();
+    if (! block->fromBase64Encoding (state))
+    {
+        error = "the saved plugin state could not be read";
+        return false;
+    }
+
+    auto apply = [plugin, block] { plugin->setStateInformation (block->getData(), (int) block->getSize()); };
+
+    if (juce::MessageManager::existsAndIsCurrentThread())
+    {
+        apply();
+    }
+    else
+    {
+        auto done = std::make_shared<juce::WaitableEvent>();
+        juce::MessageManager::callAsync ([apply, done] { apply(); done->signal(); });
+
+        bool finished = false;
+        for (int i = 0; i < 100 && ! finished; ++i)   // up to 10 s, but gives up if the control thread is told to stop
+        {
+            finished = done->wait (100);
+
+            if (auto* t = juce::Thread::getCurrentThread())
+                if (t->threadShouldExit())
+                    break;
+        }
+
+        if (! finished)
+        {
+            error = "the plugin took too long to take its saved state";
+            return false;
+        }
+    }
+
+    const juce::ScopedLock sl (infoLock);
+    lastState = state;
+    return true;
+}
+
 void VstNode::prepare (double sampleRate, int maxBlockSize)
 {
     sampleRate_ = sampleRate;
@@ -233,6 +303,7 @@ void VstNode::swapIn (std::shared_ptr<Loaded> fresh, const juce::File& file)
         const juce::ScopedLock sl (infoLock);
         pluginName = fresh->name;
         pluginPath = file.getFullPathName();
+        lastState = {};
     }
 
     latency = fresh->plugin->getLatencySamples();

@@ -11,18 +11,18 @@ Scope: `source/Source` (Core, Nodes, AudioEngine, NamProcessor, MidiRouter, Scen
 3. **SY-200 return is silent in the generated library.** `InputNode::processInactive` clears the buffer, `applyScenePreset` switches off every node a preset does not list, and `gen_poppunk_library.py` never lists `in2`.
    Fix: `on('in2')` for parts with `sy`. *(Fixed 2026-11-15, with a validator check; README section 32.)*
 4. **Dry guitar can leak after adding an amp to an existing scene.** Older presets do not list the new node or its edges. The node goes inactive with `passthrough` reset to its default (true), and unlisted edges reset to their default (enabled), so raw DI is summed into the chain. The comment in `AmpNodes.h` still says a switched-off capture is silent by default.
-   Fix options: unlisted edges default to off when either end is unlisted; or passthrough defaults true only for pedal captures (gear type from NAM metadata, or a separate node type).
+   Fix options: unlisted edges default to off when either end is unlisted; or passthrough defaults true only for pedal captures (gear type from NAM metadata, or a separate node type). *(Fixed 2026-11-16 with a narrower rule, `Core/PresetPlan.h`: an unlisted connection out of an unlisted node stays off if its target is already fed. README section 37.)*
 5. **Missing-file warnings can vanish.** In `Rig::applyGraph`, each successful `loadNodeFile` calls `setStatus({})`, wiping a "file not found" from an earlier node. `MidiOutNode::presetApplied` discards its problem string, so a failed SY-200 patch change is invisible.
-   Fix: keep a list of current problems per node rather than one string; show the count on the status strip.
-6. **IR swap waits the full 300 ms when the new IR has the same length.** `IrNode::loadFile` polls `getCurrentIRSize() != oldSize`; IRs from one pack are usually the same length. The outputs are faded for the whole wait.
-7. **An active amp with no model passes the raw DI through** (`NamAmpNode::process`, also while the try-lock fails). With a missing capture on stage this sends unprocessed guitar into the cab IR. Consider silence plus a visible warning.
-8. **VST plugin state is not saved.** Presets hold only up to 64 automatable parameters, addressed by index (`p<i>`). A VSTi's chosen patch or sample set is not recalled. Store `getStateInformation` (base64) in the node preset.
+   Fix: keep a list of current problems per node rather than one string; show the count on the status strip. *(Fixed 2026-11-16: `Rig::setProblem`, all problems shown.)*
+6. **IR swap waits the full 300 ms when the new IR has the same length.** `IrNode::loadFile` polls `getCurrentIRSize() != oldSize`; IRs from one pack are usually the same length. The outputs are faded for the whole wait. *(Fixed 2026-11-16: the wait is removed; JUCE crossfades to the new IR itself.)*
+7. **An active amp with no model passes the raw DI through** (`NamAmpNode::process`, also while the try-lock fails). With a missing capture on stage this sends unprocessed guitar into the cab IR. Consider silence plus a visible warning. *(2026-11-16: warning added; still passes through, because silence would mute the chain when the missing capture is a pedal.)*
+8. **VST plugin state is not saved.** Presets hold only up to 64 automatable parameters, addressed by index (`p<i>`). A VSTi's chosen patch or sample set is not recalled. Store `getStateInformation` (base64) in the node preset. *(Done 2026-11-16.)*
 
 ## B. Robustness
 
 - No audio device recovery: `audioDeviceStopped` is empty, there is no `audioDeviceError` handler, and nothing reopens the device. The status strip shows "No audio device" and stays there. Add a retry every 2 s from the saved device state. *(Done 2026-11-15, README section 33.)*
 - `device.xml` is written only in `~MainComponent`. Pulling power after changing the device loses the setting. Save on change. *(Done 2026-11-15.)*
-- `MidiOutNode` keeps a stale `MidiOutput` after the device is unplugged; reopen on failure or on device-list change.
+- `MidiOutNode` keeps a stale `MidiOutput` after the device is unplugged; reopen on failure or on device-list change. *(Done 2026-11-16: the port is looked up on every send.)*
 - Startup: opens on the Edit tab, selects the `default` scene, and does not go to a setlist entry. For stage use: open on Stage, go to the first (or last played) setlist entry, optional full screen. *(Done 2026-11-15 except full screen.)*
 - No debounce on `setlist:next/prev` or slot presses; a bouncing footswitch skips a song. Ignore repeats within ~150 ms. *(Done 2026-11-15.)*
 - `NoteBus` drops events silently when full; a lost note-off is a stuck note. `blockMidi.ensureSize(4096)` is smaller than a full drain (1024 events), so a burst can allocate on the audio thread.
@@ -33,16 +33,16 @@ Scope: `source/Source` (Core, Nodes, AudioEngine, NamProcessor, MidiRouter, Scen
 
 ## C. Efficiency
 
-- **Every scene preset change mutes the outputs.** `Rig::loadScenePreset` always does `fade(true)` (40 ms sleep), applies, then a 20 ms fade-in, plus JSON reads inside the mute (`readScenePreset`, one `readNodePreset` per node, and a full folder parse for slot recalls). Part changes inside a song therefore have a gap of 60 ms or more. Nodes and edges already crossfade on their own. Suggested: when no file needs loading, skip the global fade; compute the target value of every parameter first and write only the differences (no reset-then-set); cache parsed presets in memory per scene.
-- **The GUI timer re-parses the library four times a second.** `MainComponent::updateStage` runs on every tick and calls `listScenePresets` (once, plus once per assigned slot) and `listScenes`. That is on the order of 50 preset files and every scene file per tick, permanently. Cache in `Library` keyed by `revision`, or only rebuild when scene, preset, setlist index or revision changes. Hypothesis: this contributes to the CPU peaks on a 4-core machine.
+- **Every scene preset change mutes the outputs.** `Rig::loadScenePreset` always does `fade(true)` (40 ms sleep), applies, then a 20 ms fade-in, plus JSON reads inside the mute (`readScenePreset`, one `readNodePreset` per node, and a full folder parse for slot recalls). Part changes inside a song therefore have a gap of 60 ms or more. Nodes and edges already crossfade on their own. Suggested: when no file needs loading, skip the global fade; compute the target value of every parameter first and write only the differences (no reset-then-set); cache parsed presets in memory per scene. *(Done 2026-11-16, README section 35; not yet heard on the rig.)*
+- **The GUI timer re-parses the library four times a second.** `MainComponent::updateStage` runs on every tick and calls `listScenePresets` (once, plus once per assigned slot) and `listScenes`. That is on the order of 50 preset files and every scene file per tick, permanently. Cache in `Library` keyed by `revision`, or only rebuild when scene, preset, setlist index or revision changes. Hypothesis: this contributes to the CPU peaks on a 4-core machine. *(Done 2026-11-16 via the library cache.)*
 - **Prepared block size is 2048 for a 64-sample device** (`bufferCapacity = max(bs * 2, 2048)`). `juce::dsp::Convolution` sizes its FFT from the prepared block size, so each IR does large FFTs per 64-sample callback. Hypothesis: preparing the convolution with the real block size (or JUCE's non-uniform mode) lowers IR cost and the peak-to-mean ratio. Measure before changing.
-- Per-node timing in Diagnostics (mean and peak ns per node) would answer both hypotheses and show which node causes the 54% peak.
+- Per-node timing in Diagnostics (mean and peak ns per node) would answer both hypotheses and show which node causes the 54% peak. *(Done 2026-11-16, README section 38; owner to measure.)*
 - Song changes load files one at a time, each with its own fade. Wrap the graph change, the file loads and the first preset in one fade, and build the next setlist entry's models in the background so the change is immediate.
 - Already in place: AVX2, NAM fast tanh, float samples, denormal protection, inactive nodes skipped, disabled edges skipped.
 
 ## D. Usability
 
-- Tuner with output mute on a footswitch.
+- Tuner with output mute on a footswitch. *(Done 2026-11-16, README section 36.)*
 - Tap tempo; BPM per setlist entry with delay time as a note division (the generator hard-codes milliseconds).
 - A global HB/P90 input trim instead of per-preset `inp`; show the guitar tag large on Stage.
 - Stage tab: larger warning state (missing file, no audio device, xruns) than the bottom strip; "next song" is already there.

@@ -429,3 +429,42 @@ These are Windows settings, not part of RigBench, and have not been tried on you
 - **No interruptions.** Settings > System > Notifications: turn on **Do not disturb**. Settings > Windows Update: **Pause updates** before a gig (and set active hours), so the PC never restarts or installs during a show.
 - **Nothing else running.** Close other apps; turn off Wi-Fi and Bluetooth for the show if you do not need them (they can cause audio dropouts on some PCs).
 - **Then test it:** run the 60-minute soak test (section 4, step 7) with the setlist loaded, unplug and re-plug the Duo once during it, and read the day's log afterwards.
+
+## 35. Part changes without a gap
+
+**What changed.** Recalling a scene preset used to mute both outputs every time: a 20 ms fade out, the change, and a fade back in, at least 60 ms of silence in the middle of a song. Now the outputs are only muted when the preset has to **load** something (a different capture, cab IR, plugin, or a plugin's saved state). Your song library keeps every capture a song needs loaded in its own node, so its part changes load nothing and are no longer muted:
+- the nodes and connections that switch on or off crossfade over their own fade time (10 ms by default, the two settings on the Setup tab), as they always did when switched by hand;
+- only the settings that differ between the two parts are written, so anything that stays the same keeps sounding without a break (delay and reverb tails carry over if those nodes stay on);
+- EQ settings now glide to their new values over 10 ms, and the delay's mix and feedback move across one audio block, so those changes do not click;
+- a node that is being switched off keeps its old settings while it fades out.
+
+Presets are also kept in memory after they are first read, so a footswitch press reads no files. Files edited by hand, or a library copied in while RigBench is running, are picked up the next time a scene is selected (or at restart).
+
+**If a part change clicks.** Tick **Mute the outputs during part changes** on the Setup tab. That brings back the old behaviour for every scene preset change, and is saved in `settings.json` (`presetMute`). Please report which song and which change clicked: nobody has heard this yet. The most likely place is a part change that switches from one amp capture to another, because the capture that comes on has not been running and starts from stale history; the 10 ms fade-in is there to cover that. Raising **Capture on/off fade** on the Setup tab to 20 to 30 ms is the first thing to try.
+
+Also in this change: the Stage tab no longer re-reads the library from disk four times a second (it uses the same memory), and switching a node off and on again quickly continues the fade from where it was instead of jumping.
+
+## 36. Tuner
+
+A tuner with the outputs muted while you tune.
+- **Turning it on and off:** the **Tuner** button in the corner of the song box on the Stage tab, or a footswitch. To bind a footswitch, open the Setup tab, click **MIDI** beside **Tuner footswitch**, and press the switch (it is a global binding, like Next and Previous, and is debounced). Touching the tuner display also turns it off.
+- **While it is on:** both outputs fade to silence (20 ms), the app shows the Stage tab, and the display covers the footswitch buttons: the note name (E2, A2, D3, G3, B3, E4 for standard tuning), a needle from 50 cents flat to 50 cents sharp, and the distance in cents. Green is within 3 cents, amber within 10.
+- **Leaving it:** pressing Next, Previous or any footswitch button turns the tuner off and does what the switch normally does, so a forgotten tuner cannot leave a song silent.
+- It listens to the dry signal from the lowest-numbered interface input the scene uses (the guitar on Input 1), before any gain or effects. It reads from about 62 Hz upwards, so drop D and lower tunings down to B work, with A = 440 Hz. The pitch is worked out on the user-interface thread, not the audio thread.
+
+The pitch detection is tested on synthetic guitar-like tones (within 1.5 cents); it has not been tried with a real guitar.
+
+## 37. Fixes: warnings that stay, dry-signal leak, IR swaps, plugin state, MIDI output port
+
+- **Warnings no longer disappear.** Each problem is now kept separately until the thing it is about works again: a capture, IR or plugin that could not be found or loaded (per node), a missing node preset, a missing scene preset, a plugin state that could not be applied, and a MIDI output that could not send. Before, one file loading successfully wiped a "file not found" for another. The status strip shows all current problems.
+- **A MIDI output that cannot send is reported.** If a scene preset's patch change (the SY-200, say) cannot go out because no port is chosen or the port is unplugged, the status strip says so; before, it failed without a word. The port is opened again by itself when it comes back.
+- **A switched-on amp with no capture is reported** ("no capture loaded, so the signal passes through it unprocessed"). The signal still passes through, as before: silencing it would mute the whole chain if the missing capture were a boost pedal, and a missing capture cannot tell the app whether it was an amp or a pedal.
+- **No dry guitar from a node added later.** A connection that a scene preset does not list takes its default, as before, except a connection **out of a node the preset does not know about**: that one is left off if the node it feeds already has a connection switched on. So an amp added in parallel to a scene no longer mixes the dry guitar into older presets, while a pedal put into the chain (where it is the only way through) still passes the signal. Saving the preset again records the connections explicitly, as always.
+- **IR changes are quicker.** Loading a cab IR waited for the IR's length to change, which never happens when the new IR is as long as the old one (usual within one pack), so each swap muted the outputs for a third of a second. JUCE crossfades to the new IR by itself when it is ready, so the wait is gone.
+- **A plugin's own state is saved in presets.** A node preset for a VST3 effect or instrument now also holds the plugin's own state (its patch, loaded samples, anything beyond the 64 exposed settings), and recalling the preset gives it back to the plugin behind an output fade. This is what a VSTi patch (Since U Been Gone) needs. Presets saved before this have no state and behave as before; save them again to add it.
+
+## 38. Per-node CPU in Diagnostics
+
+The Diagnostics tab now lists every node with its mean and peak time per audio block, as a percentage of the buffer deadline, the costliest first, since **Reset stats** was last pressed. It shows which node is behind a high peak (the 54% peak measured earlier has not been explained yet). Measuring costs two clock reads per node per block.
+
+To use it: load the heaviest song (Still into You), press Reset stats, play for two minutes, and note the top three lines. If a Cab IR's peak is far above its mean, that points at the IR's block size (see `docs/code-review-2026-11-11.md`, section C).
