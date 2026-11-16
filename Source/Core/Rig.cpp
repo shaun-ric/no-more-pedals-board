@@ -3,6 +3,7 @@
 #include <cmath>
 #include <filesystem>
 
+#include "PresetPlan.h"
 #include "../NamMetadata.h"
 #include "../Nodes/AmpNodes.h"
 #include "../Nodes/NodeFactory.h"
@@ -53,6 +54,11 @@ Rig::Rig() : juce::Thread ("Rig control")
     // them in settings.json) and are hidden from the generic panel and from MIDI defaults.
     registry.add ("rig", "captureFadeMs", "Capture on/off fade", ParamKind::Number, 0.0f, 250.0f, 10.0f, 1.0f, " ms")->hidden = true;
     registry.add ("rig", "connectionFadeMs", "Connection on/off fade", ParamKind::Number, 0.0f, 250.0f, 10.0f, 1.0f, " ms")->hidden = true;
+
+    // Off: a scene preset that needs no capture, IR, plugin or plugin state loaded is applied while the audio
+    // keeps playing. On: the outputs are muted for every scene preset change, as they were before.
+    presetMute = registry.add ("rig", "presetMute", "Mute outputs during part changes", ParamKind::Toggle, 0.0f, 1.0f, 0.0f, 1.0f);
+    presetMute->hidden = true;
 }
 
 Rig::~Rig()
@@ -126,6 +132,7 @@ void Rig::apply (const Command& c)
             fade (true);
             resetToDefaults();
             fade (false);
+            setProblem ("scenepreset", {});
             {
                 const juce::ScopedLock sl (sceneLock);
                 currentScenePreset = {};
@@ -175,27 +182,34 @@ void Rig::loadPresetFile (const std::string& nodeId, const NodePreset& preset)
     loadNodeFile (nodeId, library->resolveAsset (preset.file, node->type()), false);
 }
 
-void Rig::setStatus (const juce::String& text)
+void Rig::setProblem (const std::string& key, const juce::String& text)
 {
     const juce::ScopedLock sl (statusLock);
-    status = text;
+
+    if (text.isEmpty())
+        problems.erase (key);
+    else
+        problems[key] = text;
+}
+
+void Rig::clearNodeProblems (const std::string& nodeId)
+{
+    for (const char* kind : { "file:", "preset:", "state:", "midi:" })
+        setProblem (kind + nodeId, {});
 }
 
 juce::String Rig::getStatusMessage() const
 {
     const juce::ScopedLock sl (statusLock);
-    juce::String text = status;
+    juce::String text;
+
+    for (const auto& p : problems)
+        text << (text.isEmpty() ? "" : "  ") << p.second;
 
     for (const auto& n : notices)
         text << (text.isEmpty() ? "" : "  ") << n;
 
     return text;
-}
-
-juce::String Rig::latestProblem() const
-{
-    const juce::ScopedLock sl (statusLock);
-    return status;
 }
 
 void Rig::addNotice (const juce::String& text)
@@ -261,6 +275,7 @@ void Rig::applyGraph (const GraphDef& def)
             if (! defHasNode (node->id(), node->type()))
             {
                 graphObj.removeNode (node->id());
+                clearNodeProblems (node->id());
 
                 const juce::ScopedLock sl (sceneLock);
                 nodePresetIds.erase (node->id());
@@ -335,12 +350,17 @@ void Rig::applyGraph (const GraphDef& def)
     if (labelsChanged)
         graphObj.touch();
 
-    setStatus (problems);
+    setProblem ("graph", problems.trim());
 
-    // The capture or IR each node should hold. One that is already loaded is left alone.
+    // The capture or IR each node should hold. One that is already loaded is left alone. A node this scene
+    // gives no file to has no file problem left over from the last scene.
     for (const auto& d : def.nodes)
+    {
         if (d.file.isNotEmpty())
             loadNodeFile (d.id, juce::File (d.file), false);
+        else
+            setProblem ("file:" + d.id, {});
+    }
 }
 
 void Rig::loadNodeFile (const std::string& nodeId, const juce::File& file, bool force)
@@ -350,13 +370,17 @@ void Rig::loadNodeFile (const std::string& nodeId, const juce::File& file, bool 
         return;
 
     const juce::String path = file.getFullPathName();
+    const std::string problemKey = "file:" + nodeId;
 
     if (! force && node->filePath() == path)
+    {
+        setProblem (problemKey, {});
         return;   // a scene that uses what is already loaded costs nothing
+    }
 
     if (! file.exists())   // a VST3 can be a folder (a bundle)
     {
-        setStatus (node->displayName() + ": file not found: " + path);
+        setProblem (problemKey, node->displayName() + ": file not found: " + path);
         return;
     }
 
@@ -371,32 +395,34 @@ void Rig::loadNodeFile (const std::string& nodeId, const juce::File& file, bool 
 
         if (fresh == nullptr)
         {
-            setStatus (node->displayName() + ": model load failed: " + juce::String (error));
+            setProblem (problemKey, node->displayName() + ": model load failed: " + juce::String (error));
             return;
         }
 
         fade (true);
         amp->swapModel (std::move (fresh), file);
         fade (false);
-        setStatus ({});
+        setProblem (problemKey, {});
     }
     else if (auto* ir = dynamic_cast<IrNode*> (node.get()))
     {
         fade (true);
         ir->loadFile (file);
         fade (false);
-        setStatus ({});
+        setProblem (problemKey, {});
     }
     else if (auto* vst = dynamic_cast<VstNode*> (node.get()))
     {
-        setStatus ("Loading " + file.getFileName() + "...");
+        setProblem ("loading", "Loading " + file.getFileName() + "...");
 
         juce::String error;
         auto fresh = vst->prepareLoad (file, error);   // slow: plugins can take a second or two
 
+        setProblem ("loading", {});
+
         if (fresh == nullptr)
         {
-            setStatus (node->displayName() + ": plugin load failed: " + error);
+            setProblem (problemKey, node->displayName() + ": plugin load failed: " + error);
             return;
         }
 
@@ -405,15 +431,13 @@ void Rig::loadNodeFile (const std::string& nodeId, const juce::File& file, bool 
 
         // The graph is committed again so the plugin's latency is taken into account.
         juce::String graphError;
-        if (! graphObj.commit (graphError))
-            setStatus ("Graph error: " + graphError);
+        const bool committed = graphObj.commit (graphError);
+        setProblem ("graph", committed ? juce::String() : "Graph error: " + graphError);
 
         juce::Thread::sleep (60);   // the audio thread has left the old plan
         graphObj.releaseRetired();
         fade (false);
-
-        if (graphError.isEmpty())
-            setStatus ({});
+        setProblem (problemKey, {});
     }
 }
 
@@ -468,11 +492,13 @@ void Rig::loadNodePreset (const std::string& nodeId, const juce::String& presetI
 
     if (! found)
     {
-        setStatus ("No preset " + (presetId.isNotEmpty() ? presetId : "in slot " + juce::String (slot)) + " for " + node->displayName());
+        setProblem ("preset:" + nodeId, "No preset " + (presetId.isNotEmpty() ? presetId : "in slot " + juce::String (slot)) + " for " + node->displayName());
         return;
     }
 
+    setProblem ("preset:" + nodeId, {});
     loadPresetFile (nodeId, preset);   // first, so the settings land on the right model
+    applyPluginState (*node, preset);
 
     for (const auto& kv : preset.values)
         if (auto* p = registry.find (nodeId + "/" + kv.first))
@@ -484,10 +510,22 @@ void Rig::loadNodePreset (const std::string& nodeId, const juce::String& presetI
         nodePresetIds[nodeId] = preset.id;
     }
 
-    if (preset.file.isEmpty())
-        setStatus ({});   // otherwise loading the file reports its own problems
+    setProblem ("midi:" + nodeId, node->presetApplied());
+}
 
-    node->presetApplied();
+// Gives a VST3 node the plugin state saved in a preset, behind an output fade, unless the plugin already has it.
+void Rig::applyPluginState (Node& node, const NodePreset& preset)
+{
+    auto* vst = dynamic_cast<VstNode*> (&node);
+    if (vst == nullptr || preset.state.isEmpty() || ! vst->stateDiffers (preset.state))
+        return;
+
+    juce::String error;
+    fade (true);
+    const bool ok = vst->applyState (preset.state, error);
+    fade (false);
+
+    setProblem ("state:" + node.id(), ok ? juce::String() : node.displayName() + ": " + error);
 }
 
 void Rig::loadScenePreset (const juce::String& presetId, int slot)
@@ -502,104 +540,218 @@ void Rig::loadScenePreset (const juce::String& presetId, int slot)
 
     if (! found)
     {
-        setStatus ("No scene preset " + (presetId.isNotEmpty() ? presetId : "in slot " + juce::String (slot)));
+        setProblem ("scenepreset", "No scene preset " + (presetId.isNotEmpty() ? presetId : "in slot " + juce::String (slot)));
         return;
     }
 
-    fade (true);          // the outputs are silent while the settings change
-    applyScenePreset (preset);
-    fade (false);
+    applyScenePreset (preset);   // mutes the outputs itself, and only when it has to
 
     const juce::ScopedLock sl (sceneLock);
     currentScenePreset = preset.id;
 }
 
+// Applies a scene preset: every node's settings and on/off state, and every connection's on/off and level.
+//
+// The whole result is worked out first, from the presets held in memory, and only the settings that differ
+// from what is playing are written. If nothing has to be loaded (no different capture, IR, plugin or plugin
+// state), the outputs are NOT muted: the nodes and connections that change fade over their own 10 ms, EQs
+// glide, and everything else keeps sounding, so a part change inside a song has no gap. If something has to
+// be loaded, or "Mute outputs during part changes" is on, the outputs are faded out around the change as before.
 void Rig::applyScenePreset (const ScenePreset& preset)
 {
-    juce::String problems;
-    std::vector<std::shared_ptr<Node>> applied;   // nodes that were given a node preset
+    struct Write { Param* param = nullptr; float value = 0.0f; };
 
-    for (const auto& node : graphObj.nodes())
+    struct NodePlan
     {
+        std::shared_ptr<Node> node;
+        NodePreset preset;
+        bool hasPreset = false, listed = false, active = false, needsFile = false, needsState = false;
+        std::vector<Write> values;
+    };
+
+    juce::String missing;
+    const auto nodes = graphObj.nodes();
+    const auto edges = graphObj.edges();
+    const auto allParams = registry.all();
+
+    // ---- 1. Work out where every setting is going -------------------------------------------------------
+    std::vector<NodePlan> plans;
+    plans.reserve (nodes.size());
+    bool mute = presetMute != nullptr && presetMute->on();
+
+    for (const auto& node : nodes)
+    {
+        NodePlan plan;
+        plan.node = node;
+
         const ScenePresetNode* entry = nullptr;
         for (const auto& n : preset.nodes)
             if (n.node == node->id())
                 entry = &n;
 
-        // A node's own default settings, then the preset's values on top.
-        for (auto* p : registry.all())
+        // A node's own default settings, then the preset's values on top. A node the preset does not list
+        // returns to its defaults and is switched off.
+        for (auto* p : allParams)
             if (p->nodeId == node->id() && p != node->activeParam() && ! p->persist && ! p->structural)
-                p->reset();
-
-        bool active = false;
+                plan.values.push_back ({ p, p->def });
 
         if (entry != nullptr)
         {
-            active = entry->active;
+            plan.listed = true;
+            plan.active = entry->active;
 
             if (entry->presetId.isNotEmpty())
             {
-                NodePreset np;
-                if (library->readNodePreset (node->type(), entry->presetId, np))
+                if (library->readNodePreset (node->type(), entry->presetId, plan.preset))
                 {
-                    if (np.file.isNotEmpty())   // the model or IR first (nothing happens if it is already loaded)
-                    {
-                        loadPresetFile (node->id(), np);
-                        const juce::String fileProblem = latestProblem();
-                        if (fileProblem.isNotEmpty())
-                            problems << fileProblem << "  ";
-                    }
+                    plan.hasPreset = true;
 
-                    for (const auto& kv : np.values)
+                    for (const auto& kv : plan.preset.values)
                         if (auto* p = registry.find (node->id() + "/" + kv.first))
                             if (! p->structural)
-                                p->set (kv.second);
+                            {
+                                bool replaced = false;
+                                for (auto& w : plan.values)
+                                    if (w.param == p) { w.value = kv.second; replaced = true; }
 
-                    const juce::ScopedLock sl (sceneLock);
-                    nodePresetIds[node->id()] = np.id;
-                    applied.push_back (node);
+                                if (! replaced)
+                                    plan.values.push_back ({ p, kv.second });
+                            }
+
+                    if (plan.preset.file.isNotEmpty() && node->hasFile())
+                        plan.needsFile = node->filePath() != library->resolveAsset (plan.preset.file, node->type()).getFullPathName();
+
+                    if (auto* vst = dynamic_cast<VstNode*> (node.get()))
+                        plan.needsState = vst->stateDiffers (plan.preset.state);
                 }
                 else
                 {
-                    problems << node->displayName() << ": missing preset " << entry->presetId << "  ";
+                    missing << node->displayName() << ": missing preset " << entry->presetId << "  ";
                 }
             }
         }
-        else
-        {
-            // A node the preset does not list returns to its defaults and is switched off.
-            const juce::ScopedLock sl (sceneLock);
-            nodePresetIds.erase (node->id());
-        }
 
-        node->activeParam()->set (active ? 1.0f : 0.0f);   // last, so nothing changes level while settings move
+        mute = mute || plan.needsFile || plan.needsState;
+        plans.push_back (std::move (plan));
     }
 
-    for (const auto& edge : graphObj.edges())
+    // Connections: what the preset says, or for a connection it does not list, the rule in PresetPlan.h
+    // (its default, unless that would add an unknown, switched-off node's dry signal to a live path).
+    std::vector<Write> edgeWrites;
     {
-        const std::string key = edge.from + ">" + edge.to;
-        const ScenePresetEdge* entry = nullptr;
-        for (const auto& e : preset.edges)
-            if (e.edge == key)
-                entry = &e;
+        std::vector<presetplan::Edge> wanted;
+        std::vector<float> levels;
 
-        if (entry != nullptr)
+        for (const auto& edge : edges)
         {
-            edge.enabled->set (entry->enabled ? 1.0f : 0.0f);
-            edge.level->set (entry->levelDb);
+            const std::string key = edge.from + ">" + edge.to;
+            const ScenePresetEdge* entry = nullptr;
+            for (const auto& e : preset.edges)
+                if (e.edge == key)
+                    entry = &e;
+
+            wanted.push_back ({ edge.from, edge.to, entry != nullptr, entry != nullptr && entry->enabled, edge.enabled->def >= 0.5f });
+            levels.push_back (entry != nullptr ? entry->levelDb : edge.level->def);
         }
-        else
+
+        const auto states = presetplan::connectionStates (wanted, [&plans] (const std::string& id)
         {
-            edge.enabled->reset();
-            edge.level->reset();
+            for (const auto& p : plans)
+                if (p.node->id() == id)
+                    return p.listed;
+            return true;
+        });
+
+        for (size_t i = 0; i < edges.size(); ++i)
+        {
+            edgeWrites.push_back ({ edges[i].enabled, states[i] ? 1.0f : 0.0f });
+            edgeWrites.push_back ({ edges[i].level, levels[i] });
         }
     }
 
-    setStatus (problems);
+    // ---- 2. Load what has to be loaded (outputs muted), then write the differences ----------------------
+    if (mute)
+        fade (true);
 
-    // Nodes that act when a preset is recalled (MIDI output) do so now that everything is in place.
-    for (const auto& node : applied)
-        node->presetApplied();
+    for (auto& plan : plans)
+        if (plan.hasPreset)
+        {
+            if (plan.needsFile)
+                loadPresetFile (plan.node->id(), plan.preset);   // reports its own problem under the node's key
+
+            applyPluginState (*plan.node, plan.preset);          // after the plugin itself; nothing to do if it has it
+        }
+
+    auto write = [] (const std::vector<Write>& writes)
+    {
+        for (const auto& w : writes)
+            if (w.param->get() != w.value)
+                w.param->set (w.value);
+    };
+
+    // Nodes that end up switched on (or were off anyway) get their settings first, so a node that is being
+    // switched on starts with the right ones. A node that is being switched off keeps its old settings
+    // while it fades out, and takes the new ones afterwards.
+    std::vector<NodePlan*> goingOff;
+
+    for (auto& plan : plans)
+    {
+        const bool wasOn = plan.node->activeParam()->on();
+
+        if (! mute && wasOn && ! plan.active)
+        {
+            bool differs = false;
+            for (const auto& w : plan.values)
+                differs = differs || w.param->get() != w.value;
+
+            if (differs)
+            {
+                goingOff.push_back (&plan);
+                continue;
+            }
+        }
+
+        write (plan.values);
+    }
+
+    for (auto& plan : plans)
+        write ({ { plan.node->activeParam(), plan.active ? 1.0f : 0.0f } });
+
+    write (edgeWrites);
+
+    if (! goingOff.empty())
+    {
+        float fadeMs = 10.0f;
+        for (const char* id : { "rig/captureFadeMs", "rig/connectionFadeMs" })
+            if (auto* p = registry.find (id))
+                fadeMs = juce::jmax (fadeMs, p->get());
+
+        juce::Thread::sleep (juce::jlimit (15, 300, (int) fadeMs + 15));   // until those nodes have faded out
+
+        for (auto* plan : goingOff)
+            write (plan->values);
+    }
+
+    if (mute)
+        fade (false);
+
+    // ---- 3. Bookkeeping, and nodes that act when a preset is recalled (MIDI output) ---------------------
+    {
+        const juce::ScopedLock sl (sceneLock);
+        for (const auto& plan : plans)
+        {
+            if (plan.hasPreset)
+                nodePresetIds[plan.node->id()] = plan.preset.id;
+            else if (! plan.listed)
+                nodePresetIds.erase (plan.node->id());
+        }
+    }
+
+    setProblem ("scenepreset", missing.trim());
+
+    for (const auto& plan : plans)
+        if (plan.hasPreset)
+            setProblem ("midi:" + plan.node->id(), plan.node->presetApplied());
 }
 
 void Rig::resetToDefaults()
@@ -624,6 +776,8 @@ bool Rig::saveNodePreset (const std::string& nodeId, const juce::String& name, j
     preset.id = Library::slug (name);
     preset.values = captureValues (*node);
     preset.file = currentFileRef (*node);   // the capture, IR or plugin, so recalling the preset loads it
+    if (auto* vst = dynamic_cast<VstNode*> (node.get()))
+        preset.state = vst->stateBase64();  // and a plugin's own state: its patch, samples and the rest
 
     if (preset.values.empty())
     {
@@ -687,9 +841,13 @@ bool Rig::saveScenePreset (const juce::String& name, juce::String& error)
             // one. The file must match too: two amp presets with the same settings but different captures
             // are different sounds, and recalling the wrong one would load the wrong capture.
             const juce::String fileRef = currentFileRef (*node);
+            juce::String state;
+            if (auto* vst = dynamic_cast<VstNode*> (node.get()))
+                state = vst->stateBase64();
+
             bool matched = false;
             for (const auto& np : library->listNodePresets (node->type()))
-                if (sameValues (values, np.values) && Library::sameFileRef (np.file, fileRef))
+                if (sameValues (values, np.values) && Library::sameFileRef (np.file, fileRef) && np.state == state)
                 {
                     entry.presetId = np.id;
                     matched = true;
@@ -704,6 +862,7 @@ bool Rig::saveScenePreset (const juce::String& name, juce::String& error)
                 np.id = Library::slug (np.name);
                 np.values = values;
                 np.file = fileRef;
+                np.state = state;
 
                 NodePreset old;
                 np.slot = library->readNodePreset (np.nodeType, np.id, old) ? old.slot : library->nextFreeNodeSlot (np.nodeType);

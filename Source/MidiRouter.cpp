@@ -24,12 +24,13 @@ bool MidiRouter::isSlotTarget (const std::string& id)
 
 bool MidiRouter::isGlobalTarget (const std::string& id)
 {
-    return id.rfind ("setlist:", 0) == 0 || isSlotTarget (id);
+    return id.rfind ("setlist:", 0) == 0 || isSlotTarget (id) || id == "tuner";
 }
 
 bool MidiRouter::isKnownTarget (const std::string& target) const
 {
-    if (target == "scenepreset" || target.rfind ("scenepreset:", 0) == 0 || target == "setlist:next" || target == "setlist:prev")
+    if (target == "scenepreset" || target.rfind ("scenepreset:", 0) == 0 || target == "setlist:next" || target == "setlist:prev"
+        || target == "tuner")
         return true;
 
     if (isSlotTarget (target))
@@ -45,6 +46,9 @@ juce::String MidiRouter::describe (const Binding& b) const
 {
     if (b.param == "scenepreset")
         return "Scene preset  (CC value = preset slot number)";
+
+    if (b.param == "tuner")
+        return "Tuner on/off, outputs muted while on  (any value above 0)";
 
     if (b.param == "setlist:next")
         return "Setlist: next entry  (any value above 0)";
@@ -516,6 +520,27 @@ void MidiRouter::dispatch (bool isNote, int channel, int number, int value, cons
     for (const size_t index : it->second)
     {
         const Binding& b = t->bindings[index];
+
+        // The tuner switch (a global binding). A value of 0 is ignored.
+        if (b.param == "tuner")
+        {
+            if (value <= 0)
+                continue;
+
+            if (isRepeatPress (b, monitorText)) { acted = true; continue; }
+            logEvent ("Footswitch: " + b.text);
+
+            juce::WeakReference<MidiRouter> self (this);
+            juce::MessageManager::callAsync ([self]
+            {
+                if (self != nullptr && self->onTuner)
+                    self->onTuner();
+            });
+
+            addLog (monitorText + "  ->  " + b.text);
+            acted = true;
+            continue;
+        }
 
         // Setlist navigation (global bindings). A value of 0, such as a release, is ignored.
         if (b.param == "setlist:next" || b.param == "setlist:prev")

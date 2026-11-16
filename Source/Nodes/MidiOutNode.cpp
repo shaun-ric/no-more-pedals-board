@@ -55,18 +55,29 @@ bool MidiOutNode::openIfNeeded (juce::String& problem)
         return false;
     }
 
-    if (output != nullptr && openedFor == device)
-        return true;
-
-    output.reset();
-
+    // The port is looked up every time: one that was unplugged since it was opened is no longer listed,
+    // and sending to it would fail without a word. It is opened again when it comes back.
+    juce::String identifier;
     for (const auto& d : juce::MidiOutput::getAvailableDevices())
         if (d.name == device)
         {
-            output = juce::MidiOutput::openDevice (d.identifier);
-            openedFor = device;
+            identifier = d.identifier;
             break;
         }
+
+    if (identifier.isEmpty())
+    {
+        output.reset();
+        openedFor = {};
+        problem = "MIDI output \"" + device + "\" is not connected";
+        return false;
+    }
+
+    if (output != nullptr && openedFor == device)
+        return true;
+
+    output = juce::MidiOutput::openDevice (identifier);
+    openedFor = device;
 
     if (output == nullptr)
     {
@@ -100,11 +111,12 @@ bool MidiOutNode::sendNow (juce::String& problem)
     return true;
 }
 
-void MidiOutNode::presetApplied()
+juce::String MidiOutNode::presetApplied()
 {
     if (activeParam() == nullptr || ! activeParam()->on() || (int) rows->get() <= 0)
-        return;
+        return {};
 
     juce::String problem;
-    sendNow (problem);   // a problem here (no port chosen, say) is shown when "Send now" is pressed
+    sendNow (problem);
+    return problem;   // shown on the status strip: a patch change that did not go out matters on stage
 }

@@ -61,6 +61,13 @@ expect t3 "commit 1 ''" "ok"
 expect t4 "broken: written 0 unchanged 1 readable 0" "good: written 1 kept 1 added 1" "new: written 1 readable 1" "same: 1 0 1 0"
 # Footswitch debounce (150 ms, per switch, safe across the counter wrap) and the event log (queued, flushed, old files removed).
 expect t5 "debounce: 1 0 1 1 0" "wrap: 1 0 1" "log: before-flush 0 old-deleted 1 recent-kept 1" "log: lines 2 first 1 second 1 stamped 1"
+# Tuner pitch detection (open strings, drop D, a sharp string; silence and noise have no pitch) and the EQ glide (no click).
+expect t6 "pitch: found 9 of 9, worst error under 1.5 cents 1" "notes: E2 A2 +12 G3 -30" "no pitch: silence 1 noise 1" \
+          "eq glide: smooth 1 jump-would-click 1 settles 1 same-end 1" "eq off: skipped 1 untouched 1"
+# Which connections a scene preset switches on (no dry leak from an amp added in parallel, no break from a pedal added
+# in series), and the presets held in memory.
+expect t7 "parallel: 1 1 1 0" "series: 1 1 1" "known: 1 1 0" "listed-off: 0 1" "two-new: 1 0" "cache: found 1 fields 1" \
+          "cache: held 1 reread 1" "cache: own-write 1 deleted 1 by-slot-gone 1" "cache: scene preset 1 by-slot 1 missing 1"
 
 # ---- 3. The generated song library is consistent ------------------------------------------------------
 echo "== 3. Library generator and validator"

@@ -23,6 +23,7 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 
 void AudioEngine::resetStats()
 {
+    rig.graph().resetTimings();
     blocks = 0;
     overruns = 0;
     sumNs = 0;
@@ -61,8 +62,23 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
             rig.graph().process (inputChannelData, numInputChannels, outputChannelData, numOutputChannels, numSamples);
         }
 
-        // Fade applied to every output, used around model and IR swaps.
-        safety.setTargetValue (rig.fadeTarget.load());
+        // The tuner listens to the dry input. If the queue is full (nobody is reading), samples are dropped.
+        const bool tuning = tunerOn.load (std::memory_order_relaxed);
+        if (tuning)
+        {
+            const int ch = tunerChannel.load (std::memory_order_relaxed);
+            if (ch >= 0 && ch < numInputChannels && inputChannelData[ch] != nullptr)
+            {
+                int start1, size1, start2, size2;
+                tunerFifo.prepareToWrite (numSamples, start1, size1, start2, size2);
+                if (size1 > 0) juce::FloatVectorOperations::copy (tunerQueue.data() + start1, inputChannelData[ch], size1);
+                if (size2 > 0) juce::FloatVectorOperations::copy (tunerQueue.data() + start2, inputChannelData[ch] + size1, size2);
+                tunerFifo.finishedWrite (size1 + size2);
+            }
+        }
+
+        // Fade applied to every output, used around model and IR swaps, and to mute while tuning.
+        safety.setTargetValue (tuning ? 0.0f : rig.fadeTarget.load());
         if (safety.isSmoothing() || safety.getTargetValue() != 1.0f)
         {
             for (int i = 0; i < numSamples; ++i)
@@ -86,6 +102,16 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
 
     if (sr > 0.0 && (double) ns > 1.0e9 * (double) numSamples / sr)
         overruns.fetch_add (1, std::memory_order_relaxed);
+}
+
+int AudioEngine::readTunerSamples (float* dest, int max)
+{
+    int start1, size1, start2, size2;
+    tunerFifo.prepareToRead (juce::jmin (max, tunerFifo.getNumReady()), start1, size1, start2, size2);
+    if (size1 > 0) juce::FloatVectorOperations::copy (dest, tunerQueue.data() + start1, size1);
+    if (size2 > 0) juce::FloatVectorOperations::copy (dest + size1, tunerQueue.data() + start2, size2);
+    tunerFifo.finishedRead (size1 + size2);
+    return size1 + size2;
 }
 
 void AudioEngine::runLoopback (const float* in, float* const* out, int numOut, int n)

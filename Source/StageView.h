@@ -2,6 +2,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <cmath>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -36,6 +37,20 @@ public:
     std::function<void (int delta)> onStep;
     std::function<void (int slot)> onSlot;                  // from 1
     std::function<void (const std::string& nodeId)> onToggleNode;
+    std::function<void()> onTuner;                          // the Tuner button, or a touch on the tuner display
+
+    // The tuner display, drawn over the footswitch buttons while the tuner is on. `note` is empty when no
+    // pitch is heard; `cents` runs from -50 (flat) to +50 (sharp).
+    void setTuner (bool on, const juce::String& note = {}, float cents = 0.0f)
+    {
+        if (on == tunerOn && note == tunerNote && std::abs (cents - tunerCents) < 0.05f)
+            return;
+
+        tunerOn = on;
+        tunerNote = note;
+        tunerCents = cents;
+        repaint();
+    }
 
     void setState (const Song& s, const std::vector<Button>& b)
     {
@@ -88,6 +103,19 @@ public:
         g.setFont (juce::FontOptions (16.0f));
         g.setColour (juce::Colour (0xff3a3d42));
         g.drawText (song.detail, currentRect.reduced (16, 8).removeFromBottom (24), juce::Justification::centred);
+
+        // The Tuner button, in the corner of the song box.
+        g.setColour (tunerOn ? juce::Colour (0xffd9822b) : juce::Colour (0xff2e3238));
+        g.fillRoundedRectangle (tunerRect.toFloat(), 6.0f);
+        g.setColour (tunerOn ? juce::Colours::black : juce::Colour (0xfff2f2f2));
+        g.setFont (juce::FontOptions (15.0f, juce::Font::bold));
+        g.drawText ("Tuner", tunerRect, juce::Justification::centred);
+
+        if (tunerOn)
+        {
+            paintTuner (g);
+            return;   // the footswitch buttons and node chips are covered while tuning
+        }
 
         // ---- The footswitch buttons ----------------------------------------------------------------
         for (size_t i = 0; i < buttonRects.size() && i < buttons.size(); ++i)
@@ -155,6 +183,9 @@ public:
                 chipRects.push_back (juce::Rectangle<int> (chipArea.getX() + (int) i * (w + gap), chipArea.getY(), w, chipArea.getHeight()));
         }
 
+        tunerRect = juce::Rectangle<int> (currentRect.getRight() - 92, currentRect.getBottom() - 38, 84, 30);
+        tunerArea = area.getUnion (chipArea);
+
         buttonRects.clear();
         const int n = (int) buttons.size();
         if (n > 0)
@@ -173,6 +204,12 @@ public:
     void mouseUp (const juce::MouseEvent& e) override
     {
         const auto p = e.getPosition();
+
+        if (tunerRect.contains (p) || (tunerOn && tunerArea.contains (p)))
+        {
+            if (onTuner) onTuner();
+            return;
+        }
 
         if (prevRect.contains (p)) { if (onStep && song.inSetlist) onStep (-1); return; }
         if (nextRect.contains (p)) { if (onStep && song.inSetlist) onStep (1); return; }
@@ -194,6 +231,69 @@ public:
     }
 
 private:
+    // The note name large in the middle, and a needle on a scale from 50 cents flat to 50 cents sharp. Green
+    // within 3 cents, amber within 10, red beyond.
+    void paintTuner (juce::Graphics& g)
+    {
+        auto r = tunerArea;
+        g.setColour (juce::Colour (0xff181a1d));
+        g.fillRoundedRectangle (r.toFloat(), 12.0f);
+
+        const bool heard = tunerNote.isNotEmpty();
+        const float off = std::abs (tunerCents);
+        const auto colour = ! heard ? juce::Colour (0xff4a4e54)
+                          : off <= 3.0f ? juce::Colour (0xff3fd06a)
+                          : off <= 10.0f ? juce::Colour (0xffe0b030) : juce::Colour (0xffe05a4a);
+
+        auto inner = r.reduced (24, 16);
+
+        g.setColour (juce::Colour (0xffb8bcc2));
+        g.setFont (juce::FontOptions (18.0f, juce::Font::bold));
+        g.drawText ("TUNER   outputs muted   touch here, press the tuner switch, or change part to leave",
+                    inner.removeFromTop (26), juce::Justification::centred);
+
+        auto scale = inner.removeFromBottom (juce::jmin (110, inner.getHeight() / 3));
+        auto readout = scale.removeFromBottom (30);
+
+        g.setColour (colour);
+        g.setFont (juce::FontOptions ((float) juce::jlimit (60, 220, inner.getHeight() - 10), juce::Font::bold));
+        g.drawText (heard ? tunerNote : juce::String ("--"), inner, juce::Justification::centred);
+
+        // The scale: a track, a mark every 10 cents, a taller one in the middle, and the needle.
+        const auto track = scale.reduced (20, 0).toFloat();
+        const float midX = track.getCentreX(), y = track.getCentreY();
+        g.setColour (juce::Colour (0xff3a3d42));
+        g.fillRoundedRectangle (track.getX(), y - 4.0f, track.getWidth(), 8.0f, 4.0f);
+
+        for (int c = -50; c <= 50; c += 10)
+        {
+            const float x = midX + track.getWidth() * 0.5f * (float) c / 50.0f;
+            const float h = c == 0 ? track.getHeight() * 0.5f : 12.0f;
+            g.setColour (c == 0 ? juce::Colour (0xfff2f2f2) : juce::Colour (0xff6a6f76));
+            g.fillRect (x - 1.5f, y - h, 3.0f, 2.0f * h);
+        }
+
+        if (heard)
+        {
+            const float x = midX + track.getWidth() * 0.5f * juce::jlimit (-50.0f, 50.0f, tunerCents) / 50.0f;
+            g.setColour (colour);
+            g.fillRoundedRectangle (x - 7.0f, y - track.getHeight() * 0.45f, 14.0f, track.getHeight() * 0.9f, 5.0f);
+        }
+
+        g.setColour (heard ? colour : juce::Colour (0xff6a6f76));
+        g.setFont (juce::FontOptions (20.0f, juce::Font::bold));
+        const int rounded = juce::roundToInt (tunerCents);
+        g.drawText (! heard ? juce::String ("play a string")
+                            : rounded == 0 ? juce::String ("in tune")
+                            : juce::String (std::abs (rounded)) + (rounded > 0 ? " cents sharp" : " cents flat"),
+                    readout, juce::Justification::centred);
+    }
+
+    bool tunerOn = false;
+    juce::String tunerNote;
+    float tunerCents = 0.0f;
+    juce::Rectangle<int> tunerRect, tunerArea;
+
     Song song;
     std::vector<Button> buttons;
     std::vector<std::shared_ptr<Node>> chips;

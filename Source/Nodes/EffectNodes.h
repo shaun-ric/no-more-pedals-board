@@ -21,50 +21,88 @@ namespace fxdetail
 
     // A second-order filter section (RBJ cookbook), computed without allocating, so coefficients can
     // be changed from the audio thread. A section set to 0 dB is skipped.
+    //
+    // A change of setting does not jump: the coefficients move in a straight line to their new values
+    // over 10 ms, so changing an EQ while a note rings (a scene preset recalled without muting the
+    // outputs, or a pedal sweeping a band) does not click. Switching a band to or from 0 dB glides to or
+    // from "no filter" in the same way. Both ends of the glide are stable filters, and every point on a
+    // straight line between two stable filters is stable too. `snap` skips the glide (a node that has just
+    // been switched on has nothing ringing).
     struct Biquad
     {
-        float b0 = 1.0f, b1 = 0.0f, b2 = 0.0f, a1 = 0.0f, a2 = 0.0f;
+        float b0 = 1.0f, b1 = 0.0f, b2 = 0.0f, a1 = 0.0f, a2 = 0.0f;        // in use now
+        float tb0 = 1.0f, tb1 = 0.0f, tb2 = 0.0f, ta1 = 0.0f, ta2 = 0.0f;   // where they are heading
         float z1 = 0.0f, z2 = 0.0f;
-        bool active = false;
+        bool active = false;         // false: the section is skipped
+        bool targetActive = false;   // false: it is gliding to "no filter", and is skipped once it gets there
+        int rampLeft = 0, rampLength = 480;
 
         void reset() noexcept { z1 = z2 = 0.0f; }
 
-        void set (double a0, double nb0, double nb1, double nb2, double na1, double na2, bool isActive) noexcept
+        void set (double a0, double nb0, double nb1, double nb2, double na1, double na2, bool isActive, bool snap = false) noexcept
         {
-            if (isActive && ! active)
-                reset();
+            if (isActive)
+            {
+                tb0 = (float) (nb0 / a0); tb1 = (float) (nb1 / a0); tb2 = (float) (nb2 / a0);
+                ta1 = (float) (na1 / a0); ta2 = (float) (na2 / a0);
+            }
+            else
+            {
+                tb0 = 1.0f; tb1 = tb2 = ta1 = ta2 = 0.0f;   // no filter
+            }
 
-            active = isActive;
-            b0 = (float) (nb0 / a0); b1 = (float) (nb1 / a0); b2 = (float) (nb2 / a0);
-            a1 = (float) (na1 / a0); a2 = (float) (na2 / a0);
+            targetActive = isActive;
+
+            if (snap || (! active && ! isActive))
+            {
+                if (isActive && ! active)
+                    reset();
+
+                b0 = tb0; b1 = tb1; b2 = tb2; a1 = ta1; a2 = ta2;
+                active = isActive;
+                rampLeft = 0;
+                return;
+            }
+
+            if (! active)   // coming on: start as "no filter" and glide in
+            {
+                reset();
+                b0 = 1.0f; b1 = b2 = a1 = a2 = 0.0f;
+                active = true;
+            }
+
+            rampLeft = juce::jmax (1, rampLength);
         }
 
-        void setPeaking (double sr, double hz, double q, double dB) noexcept
+        void setPeaking (double sr, double hz, double q, double dB, bool snap = false) noexcept
         {
+            rampLength = (int) (0.010 * sr);
             const bool on = std::abs (dB) > 0.01 && hz < 0.45 * sr;
             const double A = std::pow (10.0, dB / 40.0), w = 2.0 * juce::MathConstants<double>::pi * hz / sr;
             const double c = std::cos (w), alpha = std::sin (w) / (2.0 * q);
-            set (1.0 + alpha / A, 1.0 + alpha * A, -2.0 * c, 1.0 - alpha * A, -2.0 * c, 1.0 - alpha / A, on);
+            set (1.0 + alpha / A, 1.0 + alpha * A, -2.0 * c, 1.0 - alpha * A, -2.0 * c, 1.0 - alpha / A, on, snap);
         }
 
-        void setLowShelf (double sr, double hz, double dB) noexcept
+        void setLowShelf (double sr, double hz, double dB, bool snap = false) noexcept
         {
+            rampLength = (int) (0.010 * sr);
             const bool on = std::abs (dB) > 0.01 && hz < 0.45 * sr;
             const double A = std::pow (10.0, dB / 40.0), w = 2.0 * juce::MathConstants<double>::pi * hz / sr;
             const double c = std::cos (w), alpha = std::sin (w) / (2.0 * 0.7071), s = 2.0 * std::sqrt (A) * alpha;
             set ((A + 1) + (A - 1) * c + s,
                  A * ((A + 1) - (A - 1) * c + s), 2.0 * A * ((A - 1) - (A + 1) * c), A * ((A + 1) - (A - 1) * c - s),
-                 -2.0 * ((A - 1) + (A + 1) * c), (A + 1) + (A - 1) * c - s, on);
+                 -2.0 * ((A - 1) + (A + 1) * c), (A + 1) + (A - 1) * c - s, on, snap);
         }
 
-        void setHighShelf (double sr, double hz, double dB) noexcept
+        void setHighShelf (double sr, double hz, double dB, bool snap = false) noexcept
         {
+            rampLength = (int) (0.010 * sr);
             const bool on = std::abs (dB) > 0.01 && hz < 0.45 * sr;
             const double A = std::pow (10.0, dB / 40.0), w = 2.0 * juce::MathConstants<double>::pi * hz / sr;
             const double c = std::cos (w), alpha = std::sin (w) / (2.0 * 0.7071), s = 2.0 * std::sqrt (A) * alpha;
             set ((A + 1) - (A - 1) * c + s,
                  A * ((A + 1) + (A - 1) * c + s), -2.0 * A * ((A - 1) + (A + 1) * c), A * ((A + 1) + (A - 1) * c - s),
-                 2.0 * ((A - 1) - (A + 1) * c), (A + 1) - (A - 1) * c - s, on);
+                 2.0 * ((A - 1) - (A + 1) * c), (A + 1) - (A - 1) * c - s, on, snap);
         }
 
         void process (float* x, int n) noexcept
@@ -72,7 +110,29 @@ namespace fxdetail
             if (! active)
                 return;
 
-            for (int i = 0; i < n; ++i)
+            int i = 0;
+
+            // While gliding, the coefficients take one step towards their targets on every sample.
+            for (; i < n && rampLeft > 0; ++i, --rampLeft)
+            {
+                const float k = 1.0f / (float) rampLeft;
+                b0 += (tb0 - b0) * k; b1 += (tb1 - b1) * k; b2 += (tb2 - b2) * k;
+                a1 += (ta1 - a1) * k; a2 += (ta2 - a2) * k;
+
+                const float in = x[i];
+                const float out = b0 * in + z1;
+                z1 = b1 * in - a1 * out + z2;
+                z2 = b2 * in - a2 * out;
+                x[i] = out;
+            }
+
+            if (rampLeft == 0 && ! targetActive)
+            {
+                active = false;   // arrived at "no filter": the rest of the block passes untouched
+                return;
+            }
+
+            for (; i < n; ++i)
             {
                 const float in = x[i];
                 const float out = b0 * in + z1;
@@ -283,6 +343,8 @@ public:
         dampA = fxdetail::onePole (sr, 3500.0);
         delayTime.reset (sr, 0.05);
         delayTime.setCurrentAndTargetValue (time->get());
+        lastWet = mix->get();
+        lastFb = juce::jlimit (0.0f, 0.95f, feedback->get());
     }
 
 protected:
@@ -296,8 +358,16 @@ protected:
         const int size = (int) delayBuf.size();
         const float msToSamples = (float) sampleRate * 0.001f;
 
+        // Mix and feedback move to a new setting across the block, so a preset change does not click.
+        const float wetStep = (wet - lastWet) / (float) juce::jmax (1, n);
+        const float fbStep = (fb - lastFb) / (float) juce::jmax (1, n);
+        float wetNow = lastWet, fbNow = lastFb;
+
         for (int i = 0; i < n; ++i)
         {
+            wetNow += wetStep;
+            fbNow += fbStep;
+
             float readPos = (float) writePos - delayTime.getNextValue() * msToSamples;
             if (readPos < 0.0f)
                 readPos += (float) size;
@@ -308,12 +378,15 @@ protected:
             const float delayed = delayBuf[(size_t) i0] + frac * (delayBuf[(size_t) i1] - delayBuf[(size_t) i0]);
 
             dampState += dampA * (delayed - dampState);
-            delayBuf[(size_t) writePos] = buf[i] + dampState * fb;
-            buf[i] += delayed * wet;
+            delayBuf[(size_t) writePos] = buf[i] + dampState * fbNow;
+            buf[i] += delayed * wetNow;
 
             if (++writePos >= size)
                 writePos = 0;
         }
+
+        lastWet = wet;
+        lastFb = fb;
     }
 
     void onActivate() override
@@ -321,6 +394,8 @@ protected:
         std::fill (delayBuf.begin(), delayBuf.end(), 0.0f);
         dampState = 0.0f;
         delayTime.setCurrentAndTargetValue (time->get());
+        lastWet = mix->get();
+        lastFb = juce::jlimit (0.0f, 0.95f, feedback->get());
     }
 
 private:
@@ -329,6 +404,7 @@ private:
     std::vector<float> delayBuf;
     int writePos = 0;
     float dampA = 0.0f, dampState = 0.0f;
+    float lastWet = 0.0f, lastFb = 0.0f;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> delayTime;
 };
 
@@ -392,16 +468,18 @@ public:
         treble = addNumber ("treble", "Treble", -15.0f, 15.0f, 0.0f, 0.5f, " dB");
     }
 
-    void prepare (double sampleRate, int) override { sr = sampleRate; last[0] = last[1] = last[2] = 1000.0f; }
+    void prepare (double sampleRate, int) override { sr = sampleRate; fresh = true; }
 
 protected:
     void process (juce::AudioBuffer<float>& b, int n) override
     {
         const float v[3] = { bass->get(), mid->get(), treble->get() };
+        const bool snap = fresh;   // just switched on: go straight to the settings, nothing is ringing
+        fresh = false;
 
-        if (v[0] != last[0]) { low.setLowShelf (sr, 100.0, v[0]);         last[0] = v[0]; }
-        if (v[1] != last[1]) { peak.setPeaking (sr, 700.0, 0.7, v[1]);    last[1] = v[1]; }
-        if (v[2] != last[2]) { high.setHighShelf (sr, 3000.0, v[2]);      last[2] = v[2]; }
+        if (snap || v[0] != last[0]) { low.setLowShelf (sr, 100.0, v[0], snap);         last[0] = v[0]; }
+        if (snap || v[1] != last[1]) { peak.setPeaking (sr, 700.0, 0.7, v[1], snap);    last[1] = v[1]; }
+        if (snap || v[2] != last[2]) { high.setHighShelf (sr, 3000.0, v[2], snap);      last[2] = v[2]; }
 
         float* x = b.getWritePointer (0);
         low.process (x, n);
@@ -409,11 +487,12 @@ protected:
         high.process (x, n);
     }
 
-    void onActivate() override { low.reset(); peak.reset(); high.reset(); }
+    void onActivate() override { low.reset(); peak.reset(); high.reset(); fresh = true; }
 
 private:
     Param *bass = nullptr, *mid = nullptr, *treble = nullptr;
     fxdetail::Biquad low, peak, high;
+    bool fresh = true;
     double sr = 44100.0;
     float last[3] = { 1000.0f, 1000.0f, 1000.0f };
 };
@@ -440,8 +519,7 @@ public:
     void prepare (double sampleRate, int) override
     {
         sr = sampleRate;
-        for (auto& l : last)
-            l = 1000.0f;
+        fresh = true;
     }
 
 protected:
@@ -449,20 +527,23 @@ protected:
     {
         static const double centres[numBands] = { 31.25, 62.5, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0 };
         float* x = b.getWritePointer (0);
+        const bool snap = fresh;
+        fresh = false;
 
         for (int i = 0; i < numBands; ++i)
         {
             const float v = band[i]->get();
-            if (v != last[i]) { filter[i].setPeaking (sr, centres[i], 1.414, v); last[i] = v; }
+            if (snap || v != last[i]) { filter[i].setPeaking (sr, centres[i], 1.414, v, snap); last[i] = v; }
             filter[i].process (x, n);
         }
     }
 
-    void onActivate() override { for (auto& f : filter) f.reset(); }
+    void onActivate() override { for (auto& f : filter) f.reset(); fresh = true; }
 
 private:
     Param* band[numBands] = {};
     fxdetail::Biquad filter[numBands];
+    bool fresh = true;
     float last[numBands] = {};
     double sr = 44100.0;
 };
@@ -480,26 +561,30 @@ public:
         highGain = addNumber ("highgain", "High shelf gain", -15.0f, 15.0f, 0.0f, 0.5f, " dB");
     }
 
-    void prepare (double sampleRate, int) override { sr = sampleRate; for (auto& l : last) l = 1.0e9f; }
+    void prepare (double sampleRate, int) override { sr = sampleRate; fresh = true; }
 
 protected:
     void process (juce::AudioBuffer<float>& b, int n) override
     {
         const float lf = lowFreq->get(), lg = lowGain->get(), hf = highFreq->get(), hg = highGain->get();
 
-        if (lf != last[0] || lg != last[1]) { low.setLowShelf (sr, lf, lg);   last[0] = lf; last[1] = lg; }
-        if (hf != last[2] || hg != last[3]) { high.setHighShelf (sr, hf, hg); last[2] = hf; last[3] = hg; }
+        const bool snap = fresh;
+        fresh = false;
+
+        if (snap || lf != last[0] || lg != last[1]) { low.setLowShelf (sr, lf, lg, snap);   last[0] = lf; last[1] = lg; }
+        if (snap || hf != last[2] || hg != last[3]) { high.setHighShelf (sr, hf, hg, snap); last[2] = hf; last[3] = hg; }
 
         float* x = b.getWritePointer (0);
         low.process (x, n);
         high.process (x, n);
     }
 
-    void onActivate() override { low.reset(); high.reset(); }
+    void onActivate() override { low.reset(); high.reset(); fresh = true; }
 
 private:
     Param *lowFreq = nullptr, *lowGain = nullptr, *highFreq = nullptr, *highGain = nullptr;
     fxdetail::Biquad low, high;
+    bool fresh = true;
     float last[4] = { 1.0e9f, 1.0e9f, 1.0e9f, 1.0e9f };
     double sr = 44100.0;
 };

@@ -26,7 +26,7 @@ public:
     juce::StringArray textOptions() const override;
     void setTextValue (const juce::String& deviceName) override;
 
-    void presetApplied() override;
+    juce::String presetApplied() override;   // sends the messages; returns what went wrong, if anything
 
     // Sends the list now whatever the node's state (the "Send now" button). Returns false and says why if it
     // could not.

@@ -4,6 +4,7 @@
 
 #include <cmath>
 
+#include "Core/PitchDetector.h"
 #include "Nodes/AmpNodes.h"
 #include "Nodes/IoNodes.h"
 
@@ -112,8 +113,10 @@ MainComponent::MainComponent()
             midiNotice = "MIDI map: " + midiNotice;
 
         midiRouter.setEventLog (&events);
-        midiRouter.onSetlistStep = [this] (int delta) { setlists.step (delta); };
-        midiRouter.onSlot = [this] (int slot) { pressSlot (slot); };
+        // Changing song or part leaves the tuner, so a forgotten tuner never leaves a song silent.
+        midiRouter.onSetlistStep = [this] (int delta) { setTuner (false); setlists.step (delta); };
+        midiRouter.onSlot = [this] (int slot) { setTuner (false); pressSlot (slot); };
+        midiRouter.onTuner = [this] { setTuner (! engine.tunerOn.load()); };
         sceneManager.start (startup.scene, startup.preset);
 
         deviceManager.addMidiInputDeviceCallback ({}, &midiRouter);
@@ -302,8 +305,10 @@ MainComponent::MainComponent()
 
     addChildComponent (playView);
 
-    stageView.onStep = [this] (int delta) { setlists.step (delta); };
-    stageView.onSlot = [this] (int slot) { pressSlot (slot); };
+    stageView.onStep = [this] (int delta) { setTuner (false); setlists.step (delta); };
+    stageView.onSlot = [this] (int slot) { setTuner (false); pressSlot (slot); };
+    stageView.onTuner = [this] { setTuner (! engine.tunerOn.load()); };
+    tunerTimer.onTick = [this] { tunerTick(); };
     stageView.onToggleNode = [this] (const std::string& nodeId)
     {
         Command c;
@@ -354,6 +359,29 @@ MainComponent::MainComponent()
     setupFade (connectionFadeSlider, "rig/connectionFadeMs");
     addChildComponent (captureFadeLabel);
     addChildComponent (connectionFadeLabel);
+
+    // ---- Setup tab: the tuner's footswitch, and the fallback for part changes -----------------------
+    tunerLabel.setText ("Tuner footswitch", juce::dontSendNotification);
+    tunerLearn.onClick = [this]
+    {
+        if (midiRouter.learningParam() == "tuner")
+            midiRouter.cancelLearn();
+        else
+            midiRouter.startLearn ("tuner", false);
+    };
+    tunerClear.onClick = [this] { midiRouter.clearSceneBinding ("tuner"); };
+
+    presetMuteToggle.onClick = [this]
+    {
+        if (auto* p = rig.params().find ("rig/presetMute"))
+            p->set (presetMuteToggle.getToggleState() ? 1.0f : 0.0f);
+        saveSettings();
+    };
+
+    addChildComponent (tunerLabel);
+    addChildComponent (tunerLearn);
+    addChildComponent (tunerClear);
+    addChildComponent (presetMuteToggle);
 
     // ---- Edit tab: graph picture and toolbar ------------------------------------
     graphView.onSelect = [this] (const GraphSelection&)
@@ -482,6 +510,8 @@ MainComponent::MainComponent()
 MainComponent::~MainComponent()
 {
     stopTimer();
+    tunerTimer.stopTimer();
+    engine.tunerOn = false;
     pluginWindows.clear();
     tabs.removeChangeListener (this);
     deviceManager.removeChangeListener (this);
@@ -525,8 +555,12 @@ void MainComponent::updateTabVisibility()
     selector->setVisible (setup);
     midiBox.setVisible (setup);
     for (juce::Component* c : { (juce::Component*) &captureFadeLabel, (juce::Component*) &connectionFadeLabel,
-                                (juce::Component*) &captureFadeSlider, (juce::Component*) &connectionFadeSlider })
+                                (juce::Component*) &captureFadeSlider, (juce::Component*) &connectionFadeSlider,
+                                (juce::Component*) &tunerLabel, (juce::Component*) &tunerLearn,
+                                (juce::Component*) &presetMuteToggle })
         c->setVisible (setup);
+
+    tunerClear.setVisible (setup && midiRouter.sceneBindingText ("tuner").isNotEmpty());
 
     for (juce::Component* c : { (juce::Component*) &resetButton, (juce::Component*) &loopback,
                                 (juce::Component*) &loopInLabel, (juce::Component*) &loopOutLabel,
@@ -809,7 +843,7 @@ void MainComponent::resized()
             midiBox.setBounds (area.removeFromRight (460));
             area.removeFromRight (12);
 
-            auto fades = area.removeFromBottom (70);
+            auto fades = area.removeFromBottom (142);
             area.removeFromBottom (8);
             selector->setBounds (area);
 
@@ -821,6 +855,16 @@ void MainComponent::resized()
             auto r2 = fades.removeFromTop (30);
             connectionFadeLabel.setBounds (r2.removeFromLeft (190));
             connectionFadeSlider.setBounds (r2);
+            fades.removeFromTop (6);
+
+            auto r3 = fades.removeFromTop (30);
+            tunerLabel.setBounds (r3.removeFromLeft (190));
+            tunerLearn.setBounds (r3.removeFromLeft (110));
+            r3.removeFromLeft (4);
+            tunerClear.setBounds (r3.removeFromLeft (24));
+            fades.removeFromTop (6);
+
+            presetMuteToggle.setBounds (fades.removeFromTop (30));
             break;
         }
 
@@ -1152,7 +1196,7 @@ void MainComponent::updateStatusStrip (const juce::StringArray& freshMidi)
         }
 
     juce::String right;
-    const juce::String warning = rig.getStatusMessage();
+    const juce::String warning = currentWarnings();
 
     if (warning.isNotEmpty())
     {
@@ -1360,6 +1404,11 @@ void MainComponent::loadSettings()
 
         apply ("captureFadeMs", "rig/captureFadeMs", captureFadeSlider);
         apply ("connectionFadeMs", "rig/connectionFadeMs", connectionFadeSlider);
+
+        const bool mute = (bool) v.getProperty ("presetMute", juce::var (false));
+        if (auto* p = rig.params().find ("rig/presetMute"))
+            p->set (mute ? 1.0f : 0.0f);
+        presetMuteToggle.setToggleState (mute, juce::dontSendNotification);
         setlists.load (v.getProperty ("setlist", juce::var()).toString());
         slotCount = juce::jlimit (1, SlotsPanel::maxSlots, (int) v.getProperty ("slots", juce::var (8)));
         savedEntry = (int) v.getProperty ("entry", juce::var (-1));
@@ -1399,6 +1448,7 @@ void MainComponent::saveSettings()
     o->setProperty ("version", 1);
     o->setProperty ("captureFadeMs", captureFadeSlider.getValue());
     o->setProperty ("connectionFadeMs", connectionFadeSlider.getValue());
+    o->setProperty ("presetMute", presetMuteToggle.getToggleState());
     o->setProperty ("setlist", setlists.hasSetlist() ? setlists.setlist().id : juce::String());
     o->setProperty ("slots", slotCount);
     o->setProperty ("entry", savedEntry);                 // the song to come back to at startup
@@ -1428,6 +1478,98 @@ namespace
 
             lockWheel (*child);
         }
+    }
+}
+
+juce::String MainComponent::currentWarnings()
+{
+    juce::String text = rig.getStatusMessage();
+
+    for (const auto& node : rig.graph().nodes())
+        if (auto* amp = dynamic_cast<NamAmpNode*> (node.get()))
+            if (node->activeParam()->on() && ! amp->hasModel())
+                text << (text.isEmpty() ? "" : "  ") << node->displayName()
+                     << ": no capture loaded, so the signal passes through it unprocessed";
+
+    return text;
+}
+
+// ===== Tuner =============================================================================================
+
+void MainComponent::setTuner (bool on)
+{
+    if (on == engine.tunerOn.load())
+        return;
+
+    if (on)
+    {
+        // Listen to the guitar: the lowest-numbered interface channel that an input node of this scene uses.
+        int channel = -1;
+        for (const auto& node : rig.graph().nodes())
+            if (node->isInput())
+            {
+                const int c = node->deviceInputChannel();
+                if (c >= 0 && (channel < 0 || c < channel))
+                    channel = c;
+            }
+
+        engine.tunerChannel = juce::jmax (0, channel);
+
+        tunerWindow.assign (engine.currentSampleRate() > 50000.0 ? 8192 : 4096, 0.0f);
+        tunerFilled = 0;
+        tunerQuiet = 0;
+        tunerHz = 0.0;
+
+        float old[1024];
+        while (engine.readTunerSamples (old, 1024) > 0) {}   // anything left from last time
+
+        engine.tunerOn = true;
+        tabs.setCurrentTabIndex (tabStage);   // the tuner is shown on the Stage tab
+        stageView.setTuner (true);
+        tunerTimer.startTimerHz (15);
+    }
+    else
+    {
+        engine.tunerOn = false;
+        tunerTimer.stopTimer();
+        stageView.setTuner (false);
+    }
+
+    events.add (on ? "Tuner on (outputs muted)" : "Tuner off");
+}
+
+// Fifteen times a second while the tuner is on: take the new input, and find the pitch of the last 85 ms.
+void MainComponent::tunerTick()
+{
+    const int size = (int) tunerWindow.size();
+    float fresh[2048];
+
+    for (int n; (n = engine.readTunerSamples (fresh, 2048)) > 0;)
+    {
+        std::copy (tunerWindow.begin() + n, tunerWindow.end(), tunerWindow.begin());   // n is never more than 2048
+        std::copy (fresh, fresh + n, tunerWindow.end() - n);
+        tunerFilled = juce::jmin (size, tunerFilled + n);
+    }
+
+    if (tunerFilled < size)
+        return;
+
+    const auto result = pitch::detect (tunerWindow.data(), size, engine.currentSampleRate());
+
+    if (result.found)
+    {
+        // Steadied a little, unless the note has changed.
+        const bool sameNote = tunerHz > 0.0 && std::abs (1200.0 * std::log2 (result.hz / tunerHz)) < 40.0;
+        tunerHz = sameNote ? 0.6 * tunerHz + 0.4 * result.hz : result.hz;
+        tunerQuiet = 0;
+
+        const auto note = pitch::nearestNote (tunerHz);
+        stageView.setTuner (true, juce::String (note.name) + juce::String (note.octave), (float) note.cents);
+    }
+    else if (++tunerQuiet > 6)   // nothing for about half a second
+    {
+        tunerHz = 0.0;
+        stageView.setTuner (true);
     }
 }
 
@@ -1483,7 +1625,7 @@ void MainComponent::logChanges()
         }
     }
 
-    const juce::String status = rig.getStatusMessage();
+    const juce::String status = currentWarnings();
     if (status != loggedStatus)
     {
         loggedStatus = status;
@@ -1551,6 +1693,16 @@ void MainComponent::timerCallback()
     updateStatusStrip (fresh);
     logChanges();
 
+    // The tuner's MIDI button on the Setup tab.
+    {
+        const bool learning = midiRouter.learningParam() == "tuner";
+        const juce::String bound = midiRouter.sceneBindingText ("tuner");
+        tunerLearn.setButtonText (learning ? juce::String ("Learning...") : bound.isNotEmpty() ? bound : juce::String ("MIDI"));
+        tunerLearn.setColour (juce::TextButton::buttonColourId,
+                              learning ? juce::Colour (0xffc07a10) : bound.isNotEmpty() ? juce::Colour (0xff2a6b5a) : juce::Colour (0xff3a3a3a));
+        tunerClear.setVisible (currentTab() == tabSetup && bound.isNotEmpty());
+    }
+
     if (fresh.size() > 0)
     {
         midiLines.addArray (fresh);
@@ -1592,7 +1744,7 @@ void MainComponent::timerCallback()
     const int loops = engine.loopCount.load();
     const double loopAvgMs = loops > 0 ? 1000.0 * ((double) engine.loopSum.load() / loops) / sr : 0.0;
 
-    const juce::String status = rig.getStatusMessage();
+    const juce::String status = currentWarnings();
 
     juce::String s;
     s << "Device       : " << dev->getName() << "  (" << dev->getTypeName() << ")\n";
@@ -1677,6 +1829,26 @@ void MainComponent::timerCallback()
     s << "Callback CPU : mean " << juce::String (meanPct, 1) << "%  peak " << juce::String (peakPct, 1)
       << "%  (of the " << juce::String (bufferMs, 2) << " ms buffer deadline)\n";
     s << "Overruns     : " << (juce::int64) overruns << "   Driver xruns: " << (xruns < 0 ? juce::String ("n/a") : juce::String (xruns)) << "\n";
+    // Where the time goes: each node's share of the buffer deadline, the costliest first.
+    {
+        struct Line { juce::String name; double mean, peak; };
+        std::vector<Line> lines;
+        const double deadlineSeconds = (double) bs / sr;
+
+        for (const auto& node : rig.graph().nodes())
+        {
+            const auto t = node->timing();
+            lines.push_back ({ node->displayName(), 100.0 * t.meanSeconds / deadlineSeconds, 100.0 * t.maxSeconds / deadlineSeconds });
+        }
+
+        std::sort (lines.begin(), lines.end(), [] (const Line& a, const Line& b) { return a.mean > b.mean; });
+
+        s << "Per node     : mean / peak, as % of the deadline, since Reset stats (a node that is off costs almost nothing)\n";
+        for (const auto& l : lines)
+            s << "  " << l.name.paddedRight (' ', 28).substring (0, 28) << " " << juce::String (l.mean, 1).paddedLeft (' ', 5)
+              << " / " << juce::String (l.peak, 1).paddedLeft (' ', 5) << "\n";
+    }
+
     s << "Reported lat : in " << inLat << " + out " << outLat << " samples = "
       << juce::String (reportedMs, 2) << " ms (driver-reported, not measured)\n";
 

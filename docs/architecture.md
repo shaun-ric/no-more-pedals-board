@@ -31,6 +31,9 @@
 - Preset id is a slug (`teenage-dirtbag-verse-clean`); the display name lives in `name`.
 - NAM amp node: gain character comes from the capture; loudness matching (default target -18 dB) and input calibration against `input_level_dbu`.
 - Model/IR loads are slow: they happen on the control thread inside a fade. A preset naming the file already loaded costs nothing.
+- Scene preset recall (`Rig::applyScenePreset`) plans every target value first and writes only the differences. It mutes the outputs only if a file or plugin state must load, or `rig/presetMute` is on. Anything that changes audibly must therefore ramp by itself (edges, node on/off, EQ glide, per-block gain ramps).
+- `Library` caches scenes, node presets and scene presets in memory, keyed by `revision`; `rereadFromDisk()` (called on every scene selection) picks up outside edits. Anything that writes library files must bump `revision`.
+- Problems are kept per key in `Rig` (`setProblem`), not as one status string; clear the key when the thing works again.
 - Windows macro clashes (e.g. `interface`) have caused compile errors before; avoid such identifiers.
 
 ## Pop-Punk Set library (generated)

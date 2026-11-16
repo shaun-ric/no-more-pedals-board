@@ -62,6 +62,9 @@ public:
     // any). Parallel paths into the same node are delayed to match the slowest, and so are the outputs.
     int compensatedLatency() const noexcept { return compLatency.load(); }
 
+    // Starts every node's timing statistics again (any thread).
+    void resetTimings() { for (const auto& n : nodes()) n->resetTiming(); }
+
     // Makes views rebuild without changing the plan (after a node was renamed, say).
     void touch() noexcept { ++planRevision; }
 

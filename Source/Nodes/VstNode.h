@@ -41,6 +41,18 @@ public:
     std::shared_ptr<Loaded> prepareLoad (const juce::File& file, juce::String& error);
     void swapIn (std::shared_ptr<Loaded> fresh, const juce::File& file);
 
+    // The plugin's own state (its patch, loaded samples and anything else that is not one of the 64 exposed
+    // settings), as base64 text for a node preset. Message thread. Empty when nothing is loaded.
+    juce::String stateBase64();
+
+    // True if `state` is not what the plugin was last given or last reported, so applying it would change
+    // something. Any thread.
+    bool stateDiffers (const juce::String& state) const;
+
+    // Gives the plugin a saved state (control thread; it is handed to the message thread, as plugins expect,
+    // and waited for). Returns false and says why if it could not.
+    bool applyState (const juce::String& state, juce::String& error);
+
     // For the plugin's own window (message thread). Null when nothing is loaded.
     std::shared_ptr<juce::AudioPluginInstance> instance() const;
 
@@ -68,4 +80,5 @@ private:
 
     mutable juce::CriticalSection infoLock;
     juce::String pluginName, pluginPath;
+    juce::String lastState;   // what the plugin was last given or last reported (cleared when a plugin is loaded)
 };

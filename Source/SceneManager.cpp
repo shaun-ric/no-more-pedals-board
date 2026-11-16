@@ -129,6 +129,7 @@ void SceneManager::selectScene (const juce::String& sceneId, bool atStartup, con
         return;
     }
 
+    library.rereadFromDisk();       // picks up presets edited by hand or copied in since the last scene change
     router.loadScene (file);        // its MIDI bindings
     rig.setCurrentScene (sceneId);
     currentId = sceneId;
