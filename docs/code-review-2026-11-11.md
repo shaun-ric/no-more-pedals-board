@@ -20,14 +20,14 @@ Scope: `source/Source` (Core, Nodes, AudioEngine, NamProcessor, MidiRouter, Scen
 
 ## B. Robustness
 
-- No audio device recovery: `audioDeviceStopped` is empty, there is no `audioDeviceError` handler, and nothing reopens the device. The status strip shows "No audio device" and stays there. Add a retry every 2 s from the saved device state.
-- `device.xml` is written only in `~MainComponent`. Pulling power after changing the device loses the setting. Save on change.
+- No audio device recovery: `audioDeviceStopped` is empty, there is no `audioDeviceError` handler, and nothing reopens the device. The status strip shows "No audio device" and stays there. Add a retry every 2 s from the saved device state. *(Done 2026-11-15, README section 33.)*
+- `device.xml` is written only in `~MainComponent`. Pulling power after changing the device loses the setting. Save on change. *(Done 2026-11-15.)*
 - `MidiOutNode` keeps a stale `MidiOutput` after the device is unplugged; reopen on failure or on device-list change.
-- Startup: opens on the Edit tab, selects the `default` scene, and does not go to a setlist entry. For stage use: open on Stage, go to the first (or last played) setlist entry, optional full screen.
-- No debounce on `setlist:next/prev` or slot presses; a bouncing footswitch skips a song. Ignore repeats within ~150 ms.
+- Startup: opens on the Edit tab, selects the `default` scene, and does not go to a setlist entry. For stage use: open on Stage, go to the first (or last played) setlist entry, optional full screen. *(Done 2026-11-15 except full screen.)*
+- No debounce on `setlist:next/prev` or slot presses; a bouncing footswitch skips a song. Ignore repeats within ~150 ms. *(Done 2026-11-15.)*
 - `NoteBus` drops events silently when full; a lost note-off is a stuck note. `blockMidi.ensureSize(4096)` is smaller than a full drain (1024 events), so a burst can allocate on the audio thread.
 - `Graph::releaseRetired` relies on `sleep(60)`; correct in practice, but an audio-thread block counter would make it certain.
-- No event log: status messages, xruns, device changes and scene/preset switches with timestamps would make post-gig diagnosis possible. The CSV only has CPU numbers.
+- No event log: status messages, xruns, device changes and scene/preset switches with timestamps would make post-gig diagnosis possible. The CSV only has CPU numbers. *(Done 2026-11-15: `Documents\RigBench\logs`.)*
 - NAM core is not pinned (`third_party` checkout); `NamProcessor.cpp` depends on a recent API (`NAM/slimmable.h`). Pin a commit (submodule). JUCE is fetched at configure time; fine, but needs network on a fresh build. *(Done 2026-11-12: submodule pinned at `d3189ed`.)*
 - `File::replaceWithText` already writes through a temporary file, so saves are atomic. No change needed there.
 

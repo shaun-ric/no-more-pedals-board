@@ -59,6 +59,8 @@ expect t2 "pushed on=1 cc7=0 pb=1" "events 3 offs 1" "events after 2nd block 3"
 expect t3 "commit 1 ''" "ok"
 # Scene files: a broken file is never written over; a valid one keeps its other fields; file references match as on Windows.
 expect t4 "broken: written 0 unchanged 1 readable 0" "good: written 1 kept 1 added 1" "new: written 1 readable 1" "same: 1 0 1 0"
+# Footswitch debounce (150 ms, per switch, safe across the counter wrap) and the event log (queued, flushed, old files removed).
+expect t5 "debounce: 1 0 1 1 0" "wrap: 1 0 1" "log: before-flush 0 old-deleted 1 recent-kept 1" "log: lines 2 first 1 second 1 stamped 1"
 
 # ---- 3. The generated song library is consistent ------------------------------------------------------
 echo "== 3. Library generator and validator"

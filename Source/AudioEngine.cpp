@@ -11,8 +11,10 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 
     rig.graph().prepare (sr, bufferCapacity);
 
-    safety.reset (sr, 0.02);   // 20 ms fade
-    safety.setCurrentAndTargetValue (rig.fadeTarget.load());
+    // The outputs start silent and fade in over 20 ms, so a device that comes back (after a USB dropout,
+    // say) or a change of device settings never starts with a thump.
+    safety.reset (sr, 0.02);
+    safety.setCurrentAndTargetValue (0.0f);
 
     loopCounter = 0;
     sinceFire = -1;

@@ -404,3 +404,28 @@ These messages stay on the status strip until RigBench is restarted, so fix the 
 
 **SY-200 input in the Pop-Punk library.** The generated scene presets for the five SY-200 parts (Sk8er Boi "Guitar + SY" and "Lead boost", Still into You "Pre-chorus + chorus + SY", I Don't Care "Solo + SY", Just a Girl "Verse + SY") now switch the SY-200 input node on. Before, the input stayed off, and an input that is off is silent, so the SY-200 was never heard. `tools/validate_library.py` now fails on any preset that enables a connection from an input it leaves off.
 - To get the fix, regenerate and install the library (this **overwrites** presets and setlist names you edited in the app), or edit those five scene presets by hand: select the SY-200 in node, switch it on, and save the scene preset.
+
+## 33. Stage hardening: device recovery, startup on the Stage tab, footswitch debounce, event log
+
+**The audio device reconnects by itself.** The app keeps to the device chosen on the Setup tab (saved in `device.xml` the moment you change it, not only when the app closes). If that device closes (a USB cable knocked out, say), stops delivering audio for 3 seconds, or the driver opens a different device in its place, the status strip turns red with "Audio device lost: reconnecting to ...", and the app tries to open it again every 2 seconds with the same settings. When it is back, the outputs fade in over 20 ms instead of starting with a thump. Nothing needs pressing.
+- While the **Setup** tab is open, reconnection is paused, so it never fights a change you are making there. Choosing a different device on the Setup tab makes that the one to keep. Choosing no device turns reconnection off.
+- If the device you chose is not plugged in when the app starts, the app waits for it rather than playing through another one. Pick another device on the Setup tab if you are away from the rig.
+
+**The app starts where you left off.** It remembers the setlist entry that was playing and, at the next start, selects that song's scene and starting scene preset straight away and opens on the **Stage** tab. Without a setlist it opens on Edit, as before. (The entry is stored in `settings.json` as `entry` and `entrySetlist`.)
+
+**Footswitch debounce.** A second press of the same switch within 150 ms is ignored, so a bouncing switch can no longer skip a song, toggle a node on and straight off, or recall a scene preset twice. This applies to Next and Previous, the footswitch buttons, "recall this scene preset" bindings and toggles. Expression pedals and other settings set by value are not affected. Ignored presses show in the MIDI monitor as "(ignored: repeat within 150 ms)".
+
+**Event log.** `Documents\RigBench\logs\rigbench-YYYYMMDD.log` records, with the time to the millisecond: the app starting and closing; the audio device opened, lost, reconnection failures and back; late audio blocks and driver dropouts; warnings appearing and clearing; every song, scene and scene preset change; footswitch presses for Next, Previous, buttons and preset recalls, and ignored bounces. Logs older than 30 days are deleted at startup. After a gig, open the day's file in Notepad to see what happened and when.
+
+What this does not cover yet: an app crash (a crashing VST plugin takes the app with it; the separate engine process on the roadmap is the answer), and the Windows side (section 34).
+
+## 34. Setting up the gig PC (Windows 11 checklist)
+
+These are Windows settings, not part of RigBench, and have not been tried on your PC. Menu names can differ between Windows updates.
+
+- **Power.** Settings > System > Power & battery: Power mode **Best performance**; Screen and sleep: **Never** for both when plugged in.
+- **USB power saving off** (it can cut the Duo or the MIDI Captain). Control Panel > Hardware and Sound > Power Options > Change plan settings > Change advanced power settings > USB settings > USB selective suspend setting: **Disabled**.
+- **Start RigBench with Windows.** Press Win+R, type `shell:startup`, press Enter, and put a shortcut to `RigBench.exe` in the folder that opens.
+- **No interruptions.** Settings > System > Notifications: turn on **Do not disturb**. Settings > Windows Update: **Pause updates** before a gig (and set active hours), so the PC never restarts or installs during a show.
+- **Nothing else running.** Close other apps; turn off Wi-Fi and Bluetooth for the show if you do not need them (they can cause audio dropouts on some PCs).
+- **Then test it:** run the 60-minute soak test (section 4, step 7) with the setlist loaded, unplug and re-plug the Duo once during it, and read the day's log afterwards.

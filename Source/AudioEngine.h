@@ -17,6 +17,11 @@ public:
 
     void audioDeviceAboutToStart (juce::AudioIODevice* device) override;
     void audioDeviceStopped() override {}
+
+    // The driver reports a problem (driver thread). Only a flag is set here; the UI timer reads it with
+    // deviceError.exchange (false) and starts the reconnection.
+    void audioDeviceError (const juce::String&) override { deviceError = true; }
+    std::atomic<bool> deviceError { false };
     void audioDeviceIOCallbackWithContext (const float* const* inputChannelData, int numInputChannels,
                                            float* const* outputChannelData, int numOutputChannels,
                                            int numSamples,

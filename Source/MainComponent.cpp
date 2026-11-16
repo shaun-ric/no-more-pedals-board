@@ -23,6 +23,9 @@ namespace
 
 MainComponent::MainComponent()
 {
+    events.add ("RigBench " + juce::JUCEApplication::getInstance()->getApplicationVersion() + " started");
+    events.flush();
+
     // ---- The rig: its graph starts empty and is built from the current scene ------
     rig.setLibrary (&library);
     rig.start();
@@ -38,6 +41,18 @@ MainComponent::MainComponent()
         for (auto* type : deviceManager.getAvailableDeviceTypes())
             if (type->getTypeName() == "ASIO")
                 deviceManager.setCurrentAudioDeviceType ("ASIO", true);
+
+    // The device to keep connected to. From the saved settings when there are any, because a device that is
+    // not plugged in at startup is not open, and it is still the one wanted.
+    if (saved != nullptr)
+        readIntendedDevice (*saved);
+    else
+    {
+        captureIntendedDevice();
+        saveDeviceState();
+    }
+
+    deviceManager.addChangeListener (this);   // device changes made on the Setup tab are saved straight away
 
     if (buildError.isEmpty())
         deviceManager.addAudioCallback (&engine);
@@ -87,14 +102,19 @@ MainComponent::MainComponent()
     logFile.appendText ("time,sample_rate,buffer,cpu_mean_pct,cpu_peak_pct,overruns,driver_xruns,loop_avg_ms\n");
 
     // ---- MIDI switching ---------------------------------------------------------
+    // The setlist entry that was playing when the app last closed: its scene is selected first, so the
+    // rig comes up ready for that song instead of loading the default scene and then the song.
+    const StartupEntry startup = readStartupEntry();
+
     if (buildError.isEmpty())
     {
         if (! midiRouter.loadOrCreate (logFolder().getChildFile ("midi-map.json"), midiNotice) && midiNotice.isNotEmpty())
             midiNotice = "MIDI map: " + midiNotice;
 
+        midiRouter.setEventLog (&events);
         midiRouter.onSetlistStep = [this] (int delta) { setlists.step (delta); };
         midiRouter.onSlot = [this] (int slot) { pressSlot (slot); };
-        sceneManager.start();
+        sceneManager.start (startup.scene, startup.preset);
 
         deviceManager.addMidiInputDeviceCallback ({}, &midiRouter);
     }
@@ -260,7 +280,8 @@ MainComponent::MainComponent()
     tabs.setMinimumTabScaleFactor (1.0);
     tabs.setTabBackgroundColour (0, juce::Colour (0xff2b6a3d));
     addAndMakeVisible (tabs);
-    tabs.setCurrentTabIndex (tabEdit, false);   // opens on Edit while the rig is still being built
+    // On stage the app opens on the Stage tab, at the song it was on. Without a setlist it opens on Edit.
+    tabs.setCurrentTabIndex (startup.index >= 0 ? tabStage : tabEdit, false);
     tabs.addChangeListener (this);
 
     playView.onSelectScene = [this] (const juce::String& id)
@@ -449,6 +470,9 @@ MainComponent::MainComponent()
 
     loadSettings();   // after the sliders exist: switching times and the current setlist
 
+    if (startup.index >= 0)
+        setlists.markPlaying (startup.index);   // its scene was selected above
+
     statsStart = juce::Time::getCurrentTime();
     updateTabVisibility();
     startTimerHz (4);
@@ -460,14 +484,16 @@ MainComponent::~MainComponent()
     stopTimer();
     pluginWindows.clear();
     tabs.removeChangeListener (this);
+    deviceManager.removeChangeListener (this);
     deviceManager.removeMidiInputDeviceCallback ({}, &midiRouter);
     deviceManager.removeAudioCallback (&engine);
+    midiRouter.setEventLog (nullptr);
 
-    if (auto xml = deviceManager.createStateXml())
-    {
-        deviceStateFile().getParentDirectory().createDirectory();
-        xml->writeTo (deviceStateFile());
-    }
+    // The device settings are saved whenever they are changed on the Setup tab, not here: after a dropout
+    // the open device may be a stand-in, and saving it would make it the one the app reconnects to.
+
+    events.add ("RigBench closed");
+    events.flush();
 }
 
 void MainComponent::updateTabVisibility()
@@ -511,9 +537,180 @@ void MainComponent::updateTabVisibility()
     resized();
 }
 
-void MainComponent::changeListenerCallback (juce::ChangeBroadcaster*)
+void MainComponent::changeListenerCallback (juce::ChangeBroadcaster* source)
 {
+    if (source == &deviceManager)
+    {
+        // Only a change made by hand on the Setup tab picks a new device to keep. Changes made anywhere else
+        // are the app's own reconnection attempts, or the driver falling back to another device.
+        if (currentTab() == tabSetup)
+        {
+            captureIntendedDevice();
+            saveDeviceState();
+        }
+        return;
+    }
+
     updateTabVisibility();
+}
+
+// ===== Audio device recovery ============================================================================
+
+void MainComponent::captureIntendedDevice()
+{
+    intendedType = deviceManager.getCurrentAudioDeviceType();
+    intendedSetup = deviceManager.getAudioDeviceSetup();
+    haveIntendedDevice = deviceManager.getCurrentAudioDevice() != nullptr;   // none chosen: nothing to reconnect to
+    deviceLost = false;
+}
+
+void MainComponent::readIntendedDevice (const juce::XmlElement& saved)
+{
+    // The same attributes AudioDeviceManager::initialise reads from its own saved state.
+    juce::AudioDeviceManager::AudioDeviceSetup setup = deviceManager.getAudioDeviceSetup();
+
+    if (saved.getStringAttribute ("audioDeviceName").isNotEmpty())
+    {
+        setup.inputDeviceName = setup.outputDeviceName = saved.getStringAttribute ("audioDeviceName");
+    }
+    else
+    {
+        setup.inputDeviceName = saved.getStringAttribute ("audioInputDeviceName");
+        setup.outputDeviceName = saved.getStringAttribute ("audioOutputDeviceName");
+    }
+
+    setup.bufferSize = saved.getIntAttribute ("audioDeviceBufferSize", setup.bufferSize);
+    setup.sampleRate = saved.getDoubleAttribute ("audioDeviceRate", setup.sampleRate);
+    setup.inputChannels.parseString (saved.getStringAttribute ("audioDeviceInChans", "11"), 2);
+    setup.outputChannels.parseString (saved.getStringAttribute ("audioDeviceOutChans", "11"), 2);
+    setup.useDefaultInputChannels = ! saved.hasAttribute ("audioDeviceInChans");
+    setup.useDefaultOutputChannels = ! saved.hasAttribute ("audioDeviceOutChans");
+
+    intendedType = saved.getStringAttribute ("deviceType", deviceManager.getCurrentAudioDeviceType());
+    intendedSetup = setup;
+    haveIntendedDevice = setup.outputDeviceName.isNotEmpty() || setup.inputDeviceName.isNotEmpty();
+    deviceLost = false;
+}
+
+void MainComponent::saveDeviceState()
+{
+    if (auto xml = deviceManager.createStateXml())
+    {
+        deviceStateFile().getParentDirectory().createDirectory();
+        xml->writeTo (deviceStateFile());
+    }
+}
+
+juce::String MainComponent::intendedDeviceName() const
+{
+    return intendedSetup.outputDeviceName.isNotEmpty() ? intendedSetup.outputDeviceName : intendedSetup.inputDeviceName;
+}
+
+juce::String MainComponent::describeDevice() const
+{
+    auto* dev = deviceManager.getCurrentAudioDevice();
+    if (dev == nullptr)
+        return "none";
+
+    return dev->getName() + " (" + dev->getTypeName() + "), " + juce::String (dev->getCurrentSampleRate(), 0)
+           + " Hz, " + juce::String (dev->getCurrentBufferSizeSamples()) + " samples";
+}
+
+// Called by the UI timer. Notices that the device has gone (closed, no audio blocks for 3 seconds, or another
+// device opened in its place) and reconnects to the intended one every 2 seconds until it is back. Paused while
+// the Setup tab is open, so it never fights a change being made there.
+void MainComponent::checkAudioDevice()
+{
+    const auto now = juce::Time::getMillisecondCounter();
+    const auto blocks = engine.blocks.load();
+    const bool advancing = blocks != lastBlockCount;
+    lastBlockCount = blocks;
+
+    if (engine.deviceError.exchange (false))
+        events.add ("Audio driver reported an error");
+
+    if (! haveIntendedDevice || currentTab() == tabSetup)
+    {
+        blocksStillSinceMs = 0;
+        return;
+    }
+
+    auto* dev = deviceManager.getCurrentAudioDevice();
+    const bool running = dev != nullptr && dev->isOpen() && dev->isPlaying();
+
+    if (running && ! advancing)
+    {
+        if (blocksStillSinceMs == 0)
+            blocksStillSinceMs = now;
+    }
+    else
+    {
+        blocksStillSinceMs = 0;
+    }
+
+    const bool stalled = blocksStillSinceMs != 0 && now - blocksStillSinceMs > 3000;
+
+    const auto current = deviceManager.getAudioDeviceSetup();
+    const bool wrongDevice = running && (deviceManager.getCurrentAudioDeviceType() != intendedType
+                                         || current.outputDeviceName != intendedSetup.outputDeviceName
+                                         || current.inputDeviceName != intendedSetup.inputDeviceName);
+
+    if (! deviceLost)
+    {
+        juce::String reason;
+        if (! running)          reason = "the device closed";
+        else if (stalled)       reason = "no audio for 3 seconds";
+        else if (wrongDevice)   reason = "another device opened in its place";
+
+        if (reason.isEmpty())
+            return;
+
+        deviceLost = true;
+        lastRetryMs = now - 2000;   // the first attempt is straight away
+        lastRetryError = {};
+        events.add ("Audio device lost (" + reason + "). Reconnecting to " + intendedDeviceName());
+
+        if (running)
+            deviceManager.closeAudioDevice();
+
+        return;
+    }
+
+    if (running && advancing && ! wrongDevice)
+    {
+        deviceLost = false;
+        events.add ("Audio device back: " + describeDevice());
+        return;
+    }
+
+    if (now - lastRetryMs < 2000)
+        return;
+
+    lastRetryMs = now;
+
+    // Look for it again (a USB device that was unplugged has to be found afresh), then open it as it was.
+    for (auto* type : deviceManager.getAvailableDeviceTypes())
+        if (type->getTypeName() == intendedType)
+            type->scanForDevices();
+
+    if (deviceManager.getCurrentAudioDeviceType() != intendedType)
+        deviceManager.setCurrentAudioDeviceType (intendedType, true);
+
+    const juce::String error = deviceManager.setAudioDeviceSetup (intendedSetup, true);
+
+    if (error.isEmpty())
+    {
+        // Opened as asked. From now on, compare against the setup exactly as the driver reports it, so a
+        // small difference in how names are reported can never cause a reconnection over and over.
+        intendedType = deviceManager.getCurrentAudioDeviceType();
+        intendedSetup = deviceManager.getAudioDeviceSetup();
+    }
+    else if (error != lastRetryError)   // each different failure is logged once
+    {
+        events.add ("Reconnecting failed: " + error);
+    }
+
+    lastRetryError = error;
 }
 
 void MainComponent::resized()
@@ -916,7 +1113,12 @@ void MainComponent::updateStatusStrip (const juce::StringArray& freshMidi)
     juce::String middle;
     auto level = StatusStrip::Level::Ok;
 
-    if (auto* dev = deviceManager.getCurrentAudioDevice())
+    if (deviceLost)
+    {
+        middle = "Audio device lost: reconnecting to " + intendedDeviceName() + "...";
+        level = StatusStrip::Level::Problem;
+    }
+    else if (auto* dev = deviceManager.getCurrentAudioDevice())
     {
         const double sr = dev->getCurrentSampleRate();
         const int bs = dev->getCurrentBufferSizeSamples();
@@ -1160,9 +1362,35 @@ void MainComponent::loadSettings()
         apply ("connectionFadeMs", "rig/connectionFadeMs", connectionFadeSlider);
         setlists.load (v.getProperty ("setlist", juce::var()).toString());
         slotCount = juce::jlimit (1, SlotsPanel::maxSlots, (int) v.getProperty ("slots", juce::var (8)));
+        savedEntry = (int) v.getProperty ("entry", juce::var (-1));
+        savedEntrySetlist = v.getProperty ("entrySetlist", juce::var()).toString();
     }
 
     setlistPanel.setSlotCount (slotCount);
+}
+
+// The setlist entry that was playing when the app closed, if settings.json names one and it still exists.
+MainComponent::StartupEntry MainComponent::readStartupEntry() const
+{
+    StartupEntry e;
+    const juce::var v = juce::JSON::parse (logFolder().getChildFile ("settings.json"));
+    if (! v.isObject())
+        return e;
+
+    const juce::String setlistId = v.getProperty ("setlist", juce::var()).toString();
+    const int index = (int) v.getProperty ("entry", juce::var (-1));
+
+    if (setlistId.isEmpty() || index < 0 || v.getProperty ("entrySetlist", juce::var()).toString() != setlistId)
+        return e;
+
+    Setlist s;
+    if (! library.readSetlist (setlistId, s) || index >= (int) s.entries.size())
+        return e;
+
+    e.scene = s.entries[(size_t) index].scene;
+    e.preset = s.entries[(size_t) index].preset;
+    e.index = index;
+    return e;
 }
 
 void MainComponent::saveSettings()
@@ -1173,6 +1401,8 @@ void MainComponent::saveSettings()
     o->setProperty ("connectionFadeMs", connectionFadeSlider.getValue());
     o->setProperty ("setlist", setlists.hasSetlist() ? setlists.setlist().id : juce::String());
     o->setProperty ("slots", slotCount);
+    o->setProperty ("entry", savedEntry);                 // the song to come back to at startup
+    o->setProperty ("entrySetlist", savedEntrySetlist);   // and the setlist it is in
 
     logFolder().createDirectory();
     logFolder().getChildFile ("settings.json").replaceWithText (juce::JSON::toString (juce::var (o)));
@@ -1201,8 +1431,89 @@ namespace
     }
 }
 
+// Writes what changed since the last tick to the event log: the device, the scene, scene preset and song,
+// warnings, late audio blocks and driver dropouts. Called by the UI timer, four times a second.
+void MainComponent::logChanges()
+{
+    if (! deviceLost)
+    {
+        const juce::String device = describeDevice();
+        if (device != loggedDevice)
+        {
+            loggedDevice = device;
+            events.add ("Audio device: " + device);
+        }
+    }
+
+    const juce::String scene = sceneManager.currentSceneId();
+    if (scene != loggedScene)
+    {
+        loggedScene = scene;
+        juce::String name = scene;
+        for (const auto& s : library.listScenes())
+            if (s.id == scene)
+                name = s.name;
+        events.add ("Scene: " + name);
+    }
+
+    const juce::String preset = rig.getCurrentScenePreset();
+    if (preset != loggedPreset)
+    {
+        loggedPreset = preset;
+        if (preset.isNotEmpty())
+            events.add ("Scene preset: " + preset);
+    }
+
+    const int playing = setlists.playingIndex();
+    if (playing != loggedEntry)
+    {
+        loggedEntry = playing;
+
+        if (playing >= 0)
+        {
+            const auto& list = setlists.setlist();
+            const auto& entry = list.entries[(size_t) playing];
+            events.add ("Song " + juce::String (playing + 1) + " of " + juce::String ((int) list.entries.size()) + ": "
+                        + (entry.name.isNotEmpty() ? entry.name : entry.scene));
+
+            // Remembered, so the next start comes back to this song.
+            savedEntry = playing;
+            savedEntrySetlist = list.id;
+            saveSettings();
+        }
+    }
+
+    const juce::String status = rig.getStatusMessage();
+    if (status != loggedStatus)
+    {
+        loggedStatus = status;
+        events.add (status.isEmpty() ? juce::String ("Warnings cleared") : "Warning: " + status);
+    }
+
+    // Late audio blocks (the app's own count) and dropouts (the driver's). Both counts restart at zero when
+    // the statistics are reset or the device restarts.
+    auto* dev = deviceManager.getCurrentAudioDevice();
+    const auto overruns = engine.overruns.load();
+    if (overruns > loggedOverruns && dev != nullptr)
+    {
+        const double deadlineNs = 1.0e9 * dev->getCurrentBufferSizeSamples() / juce::jmax (1.0, dev->getCurrentSampleRate());
+        events.add ("Late audio blocks: " + juce::String ((juce::int64) (overruns - loggedOverruns))
+                    + " (worst block " + juce::String (100.0 * (double) engine.maxNs.load() / deadlineNs, 0) + "% of the deadline)");
+    }
+    loggedOverruns = overruns;
+
+    const int xruns = dev != nullptr ? juce::jmax (0, dev->getXRunCount()) : 0;
+    if (xruns > loggedXruns)
+        events.add ("Driver dropouts: " + juce::String (xruns - loggedXruns) + " (total " + juce::String (xruns) + ")");
+    loggedXruns = xruns;
+
+    events.flush();
+}
+
 void MainComponent::timerCallback()
 {
+    checkAudioDevice();
+
     if (selector != nullptr)
         lockWheel (*selector);
 
@@ -1238,6 +1549,7 @@ void MainComponent::timerCallback()
 
     const auto fresh = midiRouter.takeLog();
     updateStatusStrip (fresh);
+    logChanges();
 
     if (fresh.size() > 0)
     {
