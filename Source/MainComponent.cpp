@@ -4,7 +4,6 @@
 
 #include <cmath>
 
-#include "Core/PitchDetector.h"
 #include "Nodes/AmpNodes.h"
 #include "Nodes/IoNodes.h"
 
@@ -330,7 +329,7 @@ MainComponent::MainComponent()
         box->setScrollWheelEnabled (false);
 
     // ---- Setlist tab ------------------------------------------------------------
-    setlistPanel.onSetlistChanged = [this] { saveSettings(); };
+    setlistPanel.onSetlistChanged = [this] { saveSettings(); reportSetlistProblems(); };
     setlistPanel.onSlotCountChanged = [this] (int n) { applySlotCount (n); };
     addChildComponent (setlistPanel);
 
@@ -1443,6 +1442,7 @@ void MainComponent::loadSettings()
         loggedMasterDb = masterDb;
         stageStrips.setCollapsed ((bool) v.getProperty ("outputStripsMinimised", juce::var (false)));
         setlists.load (v.getProperty ("setlist", juce::var()).toString());
+        reportSetlistProblems();
         slotCount = juce::jlimit (1, SlotsPanel::maxSlots, (int) v.getProperty ("slots", juce::var (8)));
         savedEntry = (int) v.getProperty ("entry", juce::var (-1));
         savedEntrySetlist = v.getProperty ("entrySetlist", juce::var()).toString();
@@ -1510,6 +1510,21 @@ void MainComponent::refreshOutputChannels()
     stageStrips.setChannels (names, masterDb);
     setupStrips.setChannels (names, masterDb);
     resized();
+// Setlist entries that point at a scene or scene preset that is not there, shown on the status strip and
+// written to the event log, so a wrong entry is found before the gig rather than at the song.
+void MainComponent::reportSetlistProblems()
+{
+    const auto problems = setlists.problems();
+
+    juce::String text;
+    if (! problems.isEmpty())
+        text = "Setlist: " + problems.joinIntoString ("; ", 0, juce::jmin (3, problems.size()))
+             + (problems.size() > 3 ? "; and " + juce::String (problems.size() - 3) + " more (see the event log)" : juce::String());
+
+    rig.setProblem ("setlist", text);   // cleared again once the setlist is put right
+
+    for (const auto& p : problems)
+        events.add ("Setlist problem: " + p);
 }
 
 void MainComponent::saveSettings()
@@ -1594,8 +1609,7 @@ void MainComponent::setTuner (bool on)
 
         tunerWindow.assign (engine.currentSampleRate() > 50000.0 ? 8192 : 4096, 0.0f);
         tunerFilled = 0;
-        tunerQuiet = 0;
-        tunerHz = 0.0;
+        tunerSmoother.reset();
 
         float old[1024];
         while (engine.readTunerSamples (old, 1024) > 0) {}   // anything left from last time
@@ -1633,19 +1647,15 @@ void MainComponent::tunerTick()
 
     const auto result = pitch::detect (tunerWindow.data(), size, engine.currentSampleRate());
 
-    if (result.found)
-    {
-        // Steadied a little, unless the note has changed.
-        const bool sameNote = tunerHz > 0.0 && std::abs (1200.0 * std::log2 (result.hz / tunerHz)) < 40.0;
-        tunerHz = sameNote ? 0.6 * tunerHz + 0.4 * result.hz : result.hz;
-        tunerQuiet = 0;
+    const double hz = result.found ? tunerSmoother.add (result.hz) : tunerSmoother.quiet();
 
-        const auto note = pitch::nearestNote (tunerHz);
+    if (hz > 0.0)
+    {
+        const auto note = pitch::nearestNote (hz);
         stageView.setTuner (true, juce::String (note.name) + juce::String (note.octave), (float) note.cents);
     }
-    else if (++tunerQuiet > 6)   // nothing for about half a second
+    else
     {
-        tunerHz = 0.0;
         stageView.setTuner (true);
     }
 }

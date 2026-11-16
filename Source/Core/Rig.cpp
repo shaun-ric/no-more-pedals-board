@@ -540,7 +540,10 @@ void Rig::loadScenePreset (const juce::String& presetId, int slot)
 
     if (! found)
     {
-        setProblem ("scenepreset", "No scene preset " + (presetId.isNotEmpty() ? presetId : "in slot " + juce::String (slot)));
+        // Named with the scene, because the usual cause is a setlist entry or footswitch button that points
+        // at a preset belonging to another scene.
+        setProblem ("scenepreset", "No scene preset " + (presetId.isNotEmpty() ? presetId : "in slot " + juce::String (slot))
+                                       + " in scene " + scene);
         return;
     }
 

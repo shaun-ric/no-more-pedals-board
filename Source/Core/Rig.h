@@ -54,6 +54,11 @@ public:
     // scene file that is not valid JSON. The same text is only added once.
     void addNotice (const juce::String& text);
 
+    // Current problems, each under a key ("file:<node id>", "scenepreset", "setlist", ...), any thread. A
+    // problem stays until the thing it is about works again (or its node goes), so a file that loaded for one
+    // node no longer wipes a "file not found" for another. An empty text clears the key.
+    void setProblem (const std::string& key, const juce::String& text);
+
     // ---- Scenes and presets -------------------------------------------------------------------
     void setLibrary (Library* lib) noexcept { library = lib; }
     Library* getLibrary() const noexcept { return library; }
@@ -82,10 +87,6 @@ private:
     juce::String currentFileRef (const Node& node) const;   // the node's loaded file, as a preset stores it ("lib:..." or a path), or empty
 
     std::string nodeTypeOf (const std::string& nodeId) const;
-    // Current problems, each under a key ("file:<node id>", "scenepreset", ...). A problem stays until the
-    // thing it is about works again (or its node goes), so a file that loaded for one node no longer wipes a
-    // "file not found" for another. An empty text clears the key.
-    void setProblem (const std::string& key, const juce::String& text);
     void clearNodeProblems (const std::string& nodeId);
 
     void loadNodePreset (const std::string& nodeId, const juce::String& presetId, int slot);

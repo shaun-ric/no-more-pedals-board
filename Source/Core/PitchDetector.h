@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <vector>
 
@@ -114,4 +116,78 @@ namespace pitch
         note.cents = 100.0 * (midi - (double) nearest);
         return note;
     }
+
+    // Steadies the tuner's reading. Each estimate from detect() goes in, and the pitch to show comes out:
+    //  - the median of the last 7 estimates of the same note (about half a second), so a single wild reading (the pick attack, an
+    //    octave jump as the string dies away) is ignored rather than averaged in;
+    //  - then eased towards, a fifth of the way per estimate, so the needle moves smoothly;
+    //  - a different note (more than 50 cents away) is only accepted after 3 estimates agree on it;
+    //  - the last reading is held through short gaps, and cleared after `holdTicks` estimates with no pitch.
+    class Smoother
+    {
+    public:
+        explicit Smoother (int holdTicksIn = 8) : holdTicks (holdTicksIn) {}
+
+        // One new estimate. Returns the pitch to show (Hz), or 0 for nothing yet.
+        double add (double hz)
+        {
+            quietCount = 0;
+            if (hz <= 0.0)
+                return shown;
+
+            if (shown > 0.0 && std::abs (centsBetween (hz, shown)) > 50.0)
+            {
+                // Another note, or a wrong reading: wait until it repeats.
+                if (pendingCount > 0 && std::abs (centsBetween (hz, pendingHz)) <= 50.0)
+                    ++pendingCount;
+                else
+                {
+                    pendingHz = hz;
+                    pendingCount = 1;
+                }
+
+                if (pendingCount < 3)
+                    return shown;
+
+                count = next = 0;   // start the new note's history afresh
+                shown = 0.0;
+            }
+
+            pendingCount = 0;
+            recent[(size_t) next] = hz;
+            next = (next + 1) % (int) recent.size();
+            count = std::min (count + 1, (int) recent.size());
+
+            std::array<double, 7> sorted {};
+            std::copy (recent.begin(), recent.begin() + count, sorted.begin());
+            // With fewer than 7 estimates, only the ones held so far are sorted.
+            std::sort (sorted.begin(), sorted.begin() + count);
+            const double median = sorted[(size_t) count / 2];
+
+            shown = shown > 0.0 ? shown * std::pow (median / shown, 0.2) : median;
+            return shown;
+        }
+
+        // No pitch found this time. Returns the pitch to show, or 0 once the note has gone.
+        double quiet()
+        {
+            if (++quietCount > holdTicks)
+                reset();
+            return shown;
+        }
+
+        void reset()
+        {
+            shown = 0.0;
+            count = next = pendingCount = 0;
+        }
+
+    private:
+        static double centsBetween (double a, double b) { return 1200.0 * std::log2 (a / b); }
+
+        int holdTicks;
+        std::array<double, 7> recent {};
+        int count = 0, next = 0, quietCount = 0, pendingCount = 0;
+        double pendingHz = 0.0, shown = 0.0;
+    };
 }

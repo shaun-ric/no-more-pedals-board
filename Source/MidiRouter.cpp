@@ -664,7 +664,23 @@ void MidiRouter::dispatch (bool isNote, int channel, int number, int value, cons
 void MidiRouter::rebuildTable()
 {
     auto t = std::make_shared<Table>();
-    t->bindings = sceneBindings;
+
+    // A footswitch button, setlist step or tuner switch is global, so it wins over a setting in a scene that
+    // uses the same message (a scene saved before the switch was learned). One message never does two jobs.
+    std::set<int> globalKeys;
+    for (const auto& b : globalBindings)
+        globalKeys.insert (keyFor (b.isNote, b.channel, b.number));
+
+    juce::StringArray shadowed;
+    for (const auto& b : sceneBindings)
+    {
+        if (globalKeys.count (keyFor (b.isNote, b.channel, b.number)) != 0)
+            shadowed.add ("Ch " + juce::String (b.channel) + (b.isNote ? " Note " : " CC ") + juce::String (b.number)
+                          + " (" + describe (b) + ")");
+        else
+            t->bindings.push_back (b);
+    }
+
     t->bindings.insert (t->bindings.end(), globalBindings.begin(), globalBindings.end());
 
     for (size_t i = 0; i < t->bindings.size(); ++i)
@@ -673,8 +689,14 @@ void MidiRouter::rebuildTable()
         t->lookup[keyFor (b.isNote, b.channel, b.number)].push_back (i);
     }
 
-    const juce::SpinLock::ScopedLockType lock (tableLock);
-    table = std::move (t);
+    {
+        const juce::SpinLock::ScopedLockType lock (tableLock);
+        table = std::move (t);
+    }
+
+    if (! shadowed.isEmpty())
+        addLog ("Not used in this scene, because a footswitch, setlist or tuner switch sends the same message: "
+                + shadowed.joinIntoString ("; "));
 }
 
 void MidiRouter::loadScene (const juce::File& file)
@@ -833,33 +855,48 @@ void MidiRouter::finishLearn (bool isNote, int channel, int number)
     nb.text = describe (nb);
 
     if (isGlobalTarget (id))
-    {
         nb.mode = Mode::Set;
-        globalBindings.erase (std::remove_if (globalBindings.begin(), globalBindings.end(), [&nb] (const Binding& b)
-        {
-            return (b.isNote == nb.isNote && b.channel == nb.channel && b.number == nb.number) || b.param == nb.param;
-        }), globalBindings.end());
 
-        globalBindings.push_back (nb);
-        rebuildTable();
-        saveGlobal();
-        addLog ("Learned: Ch " + juce::String (channel) + (isNote ? " Note " : " CC ") + juce::String (number) + "  ->  " + nb.text);
-        return;
-    }
-
-    // One to one: the new message replaces anything already on its address, and any earlier
-    // binding of this setting in the same mode.
-    sceneBindings.erase (std::remove_if (sceneBindings.begin(), sceneBindings.end(), [&nb] (const Binding& b)
+    // One switch, one job: whatever this message did before (a footswitch button, the tuner, a setting in
+    // this scene) it does no longer, and the setting being learned loses its earlier message.
+    const auto sameAddress = [&nb] (const Binding& b)
     {
-        return (b.isNote == nb.isNote && b.channel == nb.channel && b.number == nb.number)
-            || (b.param == nb.param && b.mode == nb.mode);
-    }), sceneBindings.end());
+        return b.isNote == nb.isNote && b.channel == nb.channel && b.number == nb.number;
+    };
 
-    sceneBindings.push_back (nb);
+    juce::StringArray replaced;
+    const auto removeFrom = [&] (std::vector<Binding>& list, bool sameTargetToo)
+    {
+        bool changed = false;
+        list.erase (std::remove_if (list.begin(), list.end(), [&] (const Binding& b)
+        {
+            const bool sameTarget = b.param == nb.param && (isGlobalTarget (b.param) || b.mode == nb.mode);
+            if (sameAddress (b) && ! sameTarget)
+                replaced.addIfNotAlreadyThere (describe (b));
+            const bool remove = sameAddress (b) || (sameTargetToo && sameTarget);
+            changed = changed || remove;
+            return remove;
+        }), list.end());
+        return changed;
+    };
+
+    const bool global = isGlobalTarget (id);
+    const bool globalChanged = removeFrom (globalBindings, global);
+    const bool sceneChanged = removeFrom (sceneBindings, ! global);
+
+    (global ? globalBindings : sceneBindings).push_back (nb);
     rebuildTable();
-    saveScene();
 
-    addLog ("Learned: Ch " + juce::String (channel) + (isNote ? " Note " : " CC ") + juce::String (number) + "  ->  " + nb.text);
+    if (global || globalChanged)
+        saveGlobal();
+    if (! global || sceneChanged)
+        saveScene();
+
+    juce::String line = "Learned: Ch " + juce::String (channel) + (isNote ? " Note " : " CC ") + juce::String (number) + "  ->  " + nb.text;
+    if (! replaced.isEmpty())
+        line << "\nIt no longer does: " << replaced.joinIntoString ("; ")
+             << (globalChanged && ! global ? " (in every scene)" : "");
+    addLog (line);
 }
 
 void MidiRouter::clearSceneBinding (const std::string& paramId)
